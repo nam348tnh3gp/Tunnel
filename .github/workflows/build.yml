@@ -24,6 +24,28 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
+      # ------------------ BUILD PROOT TỪ SOURCE ------------------
+      - name: Install proot build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-dev libtalloc-dev uthash-dev
+
+      - name: Checkout proot source
+        uses: actions/checkout@v4
+        with:
+          repository: proot-me/proot
+          path: proot-source
+
+      - name: Build proot
+        run: |
+          cd proot-source
+          # Tạo loader và config trước
+          make -C src loader.elf loader-m32.elf build.h
+          # Biên dịch proot và care
+          make -C src proot care
+          # Kiểm tra file binary đã tạo
+          ls -la src/proot
+
       - name: Create Flutter project
         run: |
           flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
@@ -34,7 +56,7 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      - name: Setup native libraries + proot
+      - name: Setup native libraries
         run: |
           cd tunnel_app
           
@@ -45,9 +67,8 @@ jobs:
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-          # Tải proot-static
-          wget -O android/app/src/main/jniLibs/arm64-v8a/libproot.so \
-            https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-arm64
+          # Copy proot đã build từ source (đặt tên libproot.so)
+          cp ../proot-source/src/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
 
           # packagingOptions
