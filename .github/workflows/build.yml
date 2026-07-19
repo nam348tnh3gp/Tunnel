@@ -1,0 +1,46 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:   # Cho phép chạy thủ công từ GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.22.0'
+          channel: 'stable'
+
+      # Tải binary cloudflared (ARM64) và đặt vào thư mục assets
+      - name: Download cloudflared binary
+        run: |
+          mkdir -p assets
+          wget -O assets/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          chmod +x assets/cloudflared
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      # Build APK release, chia theo ABI để nhẹ hơn
+      - name: Build APK
+        run: flutter build apk --release --split-per-abi
+
+      # Upload các file APK lên GitHub Actions Artifacts
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunnel-apk
+          path: build/app/outputs/flutter-apk/*.apk
