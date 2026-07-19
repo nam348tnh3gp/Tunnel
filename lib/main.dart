@@ -7,6 +7,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_ce/device_info_ce.dart';
 
+// MethodChannel để lấy nativeLibraryDir
+const MethodChannel _nativeChannel = MethodChannel('com.yourcompany.tunnel_controller/native');
+
 void main() => runApp(MyApp());
 
 class MyApp extends StatelessWidget {
@@ -59,27 +62,34 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     await Permission.storage.request();
   }
 
-  // -------------------- Binary setup (GIẢI PHÁP CỘNG ĐỒNG) --------------------
+  // -------------------- Binary setup (ưu tiên native lib) --------------------
   Future<void> _initBinary() async {
     try {
-      // Lấy đường dẫn thư mục native library (nơi .so được giải nén)
-      final String nativeDir = (await getApplicationSupportDirectory()).path;
-      final String binaryPath = '$nativeDir/libcloudflared.so';
-      final File binaryFile = File(binaryPath);
-
-      if (await binaryFile.exists()) {
-        // Đảm bảo quyền thực thi (mặc dù đã có)
-        await Process.run('chmod', ['755', binaryPath]);
-        setState(() {
-          _binaryPath = binaryPath;
-          _binaryReady = true;
-        });
-        _appendLog('✅ Cloudflared binary ready (native lib)');
-        return;
+      // Lấy nativeLibraryDir từ native code
+      String? nativeDir;
+      try {
+        nativeDir = await _nativeChannel.invokeMethod('getNativeLibraryDir');
+      } catch (e) {
+        // Không có channel, bỏ qua
       }
 
-      // Fallback: nếu không tìm thấy, thử copy từ assets vào app directory
-      _appendLog('⚠️ Binary not found in native libs, fallback...');
+      if (nativeDir != null && nativeDir.isNotEmpty) {
+        final String binaryPath = '$nativeDir/libcloudflared.so';
+        final File binaryFile = File(binaryPath);
+        if (await binaryFile.exists()) {
+          await Process.run('chmod', ['755', binaryPath]);
+          setState(() {
+            _binaryPath = binaryPath;
+            _binaryReady = true;
+          });
+          _appendLog('✅ Cloudflared binary ready from native libs');
+          return;
+        } else {
+          _appendLog('⚠️ libcloudflared.so not found in native lib dir, fallback...');
+        }
+      }
+
+      // Fallback: copy từ assets vào app directory
       await _fallbackInitBinary();
     } catch (e) {
       _appendLog('❌ Error initializing binary: $e');
@@ -87,7 +97,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // Fallback: copy từ assets vào thư mục documents (yêu cầu targetSdkVersion <= 28)
   Future<void> _fallbackInitBinary() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
@@ -165,7 +174,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      // Chạy binary trực tiếp (không cần shell wrapper)
       _process = await Process.start(
         _binaryPath,
         args,
