@@ -34,23 +34,20 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      # 👇 Cấu hình Native Library + MainActivity
-      - name: Setup native library and MainActivity
+      - name: Setup native library, MainActivity and AndroidManifest
         run: |
           cd tunnel_app
           
-          # Tạo thư mục jniLibs cho ARM64
+          # Tạo jniLibs và tải binary
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          
-          # Tải binary cloudflared và đổi tên thành libcloudflared.so
           wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-          # Thêm packagingOptions để buộc giải nén .so
+          # Thêm packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # Tạo MainActivity.kt để cung cấp nativeLibraryDir
+          # Tạo MainActivity.kt
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -76,7 +73,57 @@ jobs:
           }
           EOF
 
-          # (Tùy chọn) Vẫn giữ binary trong assets để fallback
+          # Tạo AndroidManifest.xml với đầy đủ quyền
+          mkdir -p android/app/src/main
+          cat > android/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.yourcompany.tunnel_controller">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+              <application
+                  android:label="Tunnel Controller"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true"
+                  android:networkSecurityConfig="@xml/network_security_config">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme" />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+
+          # Tạo thư mục xml và file network_security_config để cho phép HTTP (nếu cần)
+          mkdir -p android/app/src/main/res/xml
+          cat > android/app/src/main/res/xml/network_security_config.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <domain-config cleartextTrafficPermitted="true">
+                  <domain includeSubdomains="true">localhost</domain>
+                  <domain includeSubdomains="true">127.0.0.1</domain>
+                  <domain includeSubdomains="true">trycloudflare.com</domain>
+              </domain-config>
+          </network-security-config>
+          EOF
+
+          # Copy binary vào assets để fallback
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           chmod +x assets/cloudflared
 
