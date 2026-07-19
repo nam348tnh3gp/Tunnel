@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:system_info_plus/system_info_plus.dart';
+import 'package:device_info_ce/device_info_ce.dart'; // 👈 Thay thế import
 
 void main() => runApp(MyApp());
 
@@ -36,6 +36,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _binaryPath = '';
   bool _binaryReady = false;
 
+  // System info
   String _cpuInfo = '';
   String _tempInfo = '';
   Timer? _systemTimer;
@@ -55,12 +56,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.dispose();
   }
 
-  // -------------------- Permissions --------------------
   Future<void> _requestPermissions() async {
     await Permission.storage.request();
   }
 
-  // -------------------- Binary setup --------------------
   Future<void> _initBinary() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
@@ -82,20 +81,25 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- System monitor (FIXED) --------------------
+  // -------------------- System monitor (Cập nhật) --------------------
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
         try {
-          // Gọi các phương thức async từ SystemInfoPlus (đúng theo tài liệu)
-          final cpu = await SystemInfoPlus.cpuUsage;
-          final temp = await SystemInfoPlus.batteryTemperature;
+          // Lấy thông tin performance bằng device_info_ce
+          PerformanceInfo perf = await DeviceInfoCe.performanceInfo();
+          
+          // CPU usage là giá trị double (0.0 - 1.0), nhân 100 để ra %
+          double cpu = (perf.cpuUsage ?? 0) * 100;
+          // Nhiệt độ (摄氏度)
+          double temp = perf.temperature ?? 0;
+
           setState(() {
-            _cpuInfo = 'CPU: ${cpu?.toStringAsFixed(1) ?? 'N/A'}%';
-            _tempInfo = '🌡️ Temp: ${temp?.toStringAsFixed(1) ?? 'N/A'} °C';
+            _cpuInfo = 'CPU: ${cpu.toStringAsFixed(1)}%';
+            _tempInfo = '🌡️ Temp: ${temp.toStringAsFixed(1)} °C';
           });
         } catch (e) {
-          // Nếu có lỗi, hiển thị thông báo
+          // Xử lý lỗi nếu không lấy được dữ liệu
           if (mounted) {
             setState(() {
               _cpuInfo = 'CPU: N/A';
