@@ -37,6 +37,12 @@ jobs:
           cd tunnel_app
           flutter pub get
 
+      # 👇 SỬA targetSdkVersion xuống 28 (quan trọng để chạy binary)
+      - name: Set targetSdkVersion to 28
+        run: |
+          cd tunnel_app
+          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 28/g' android/app/build.gradle
+
       # Tải binary cloudflared và đặt vào assets
       - name: Download cloudflared binary
         run: |
