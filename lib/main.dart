@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:device_info_ce/device_info_ce.dart'; // 👈 Thay thế import
+import 'package:device_info_ce/device_info_ce.dart';
 
 void main() => runApp(MyApp());
 
@@ -36,7 +36,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _binaryPath = '';
   bool _binaryReady = false;
 
-  // System info
   String _cpuInfo = '';
   String _tempInfo = '';
   Timer? _systemTimer;
@@ -57,19 +56,23 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   }
 
   Future<void> _requestPermissions() async {
+    // Cần xin thêm quyền INTERNET (đã có sẵn trong manifest)
     await Permission.storage.request();
   }
 
+  // -------------------- Binary setup (đã sửa) --------------------
   Future<void> _initBinary() async {
     try {
-      final dir = await getApplicationDocumentsDirectory();
+      // Dùng thư mục tạm để đảm bảo quyền thực thi
+      final dir = await getTemporaryDirectory();
       final binaryPath = '${dir.path}/cloudflared';
       final file = File(binaryPath);
 
       if (!await file.exists()) {
         final data = await rootBundle.load('assets/cloudflared');
         await file.writeAsBytes(data.buffer.asUint8List(), flush: true);
-        await Process.run('chmod', ['+x', binaryPath]);
+        // Cấp quyền 755 (rwxr-xr-x)
+        await Process.run('chmod', ['755', binaryPath]);
       }
       setState(() {
         _binaryPath = binaryPath;
@@ -81,25 +84,19 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- System monitor (Cập nhật) --------------------
+  // -------------------- System monitor --------------------
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
         try {
-          // Lấy thông tin performance bằng device_info_ce
           PerformanceInfo perf = await DeviceInfoCe.performanceInfo();
-          
-          // CPU usage là giá trị double (0.0 - 1.0), nhân 100 để ra %
           double cpu = (perf.cpuUsage ?? 0) * 100;
-          // Nhiệt độ (摄氏度)
           double temp = perf.temperature ?? 0;
-
           setState(() {
             _cpuInfo = 'CPU: ${cpu.toStringAsFixed(1)}%';
             _tempInfo = '🌡️ Temp: ${temp.toStringAsFixed(1)} °C';
           });
         } catch (e) {
-          // Xử lý lỗi nếu không lấy được dữ liệu
           if (mounted) {
             setState(() {
               _cpuInfo = 'CPU: N/A';
@@ -111,12 +108,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
-  // -------------------- Log helper --------------------
   void _appendLog(String msg) {
     setState(() => _log += '\n$msg');
   }
 
-  // -------------------- Tunnel control --------------------
+  // -------------------- Tunnel control (đã sửa) --------------------
   void _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready, please wait...');
@@ -144,7 +140,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      _process = await Process.start(_binaryPath, args);
+      // Chạy binary với runInShell: true để vượt qua SELinux
+      _process = await Process.start(
+        _binaryPath,
+        args,
+        runInShell: true,
+        mode: ProcessStartMode.normal,
+      );
       _isRunning = true;
       setState(() {});
       _appendLog('✅ Tunnel started (PID: ${_process!.pid})');
