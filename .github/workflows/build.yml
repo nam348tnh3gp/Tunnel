@@ -3,7 +3,7 @@ name: Build APK
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch:   # Cho phép chạy thủ công từ GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
@@ -24,23 +24,34 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      # Tải binary cloudflared (ARM64) và đặt vào thư mục assets
+      # Tạo project Flutter mới (có cấu hình Gradle mới nhất)
+      - name: Create Flutter project
+        run: |
+          flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
+          # Xóa các file mặc định
+          rm -rf tunnel_app/lib tunnel_app/pubspec.yaml tunnel_app/assets
+          # Copy code và assets từ thư mục gốc vào
+          cp -r lib tunnel_app/
+          cp pubspec.yaml tunnel_app/
+          cp -r assets tunnel_app/ 2>/dev/null || mkdir -p tunnel_app/assets
+          cd tunnel_app
+          flutter pub get
+
+      # Tải binary cloudflared và đặt vào assets
       - name: Download cloudflared binary
         run: |
-          mkdir -p assets
-          wget -O assets/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
-          chmod +x assets/cloudflared
+          wget -O tunnel_app/assets/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          chmod +x tunnel_app/assets/cloudflared
 
-      - name: Install Flutter dependencies
-        run: flutter pub get
-
-      # Build APK release, chia theo ABI để nhẹ hơn
+      # Build APK
       - name: Build APK
-        run: flutter build apk --release --split-per-abi
+        run: |
+          cd tunnel_app
+          flutter build apk --release --split-per-abi
 
-      # Upload các file APK lên GitHub Actions Artifacts
+      # Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: tunnel-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          path: tunnel_app/build/app/outputs/flutter-apk/*.apk
