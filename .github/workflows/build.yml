@@ -34,8 +34,8 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      # 👇 Cấu hình Native Library (GIẢI PHÁP CỘNG ĐỒNG)
-      - name: Setup native library
+      # 👇 Cấu hình Native Library + MainActivity
+      - name: Setup native library and MainActivity
         run: |
           cd tunnel_app
           
@@ -47,8 +47,34 @@ jobs:
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-          # Thêm packagingOptions vào build.gradle để buộc giải nén .so
+          # Thêm packagingOptions để buộc giải nén .so
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
+
+          # Tạo MainActivity.kt để cung cấp nativeLibraryDir
+          mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
+          cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
+          package com.yourcompany.tunnel_controller
+
+          import android.os.Bundle
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+
+          class MainActivity : FlutterActivity() {
+              private val CHANNEL = "com.yourcompany.tunnel_controller/native"
+
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+                      if (call.method == "getNativeLibraryDir") {
+                          result.success(applicationInfo.nativeLibraryDir)
+                      } else {
+                          result.notImplemented()
+                      }
+                  }
+              }
+          }
+          EOF
 
           # (Tùy chọn) Vẫn giữ binary trong assets để fallback
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
