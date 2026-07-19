@@ -2,7 +2,7 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';   // 👈 thêm để dùng rootBundle
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:system_info_plus/system_info_plus.dart';
@@ -24,13 +24,11 @@ class TunnelControlPage extends StatefulWidget {
 }
 
 class _TunnelControlPageState extends State<TunnelControlPage> {
-  // UI controllers
   final TextEditingController _tokenController = TextEditingController();
   final TextEditingController _portController = TextEditingController(text: '8080');
   bool _useTryMode = false;
   bool _isRunning = false;
 
-  // Tunnel process
   Process? _process;
   StreamSubscription? _stdoutSub;
   StreamSubscription? _stderrSub;
@@ -38,7 +36,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _binaryPath = '';
   bool _binaryReady = false;
 
-  // System info
   String _cpuInfo = '';
   String _tempInfo = '';
   Timer? _systemTimer;
@@ -85,15 +82,27 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- System monitor --------------------
+  // -------------------- System monitor (FIXED) --------------------
   void _startSystemMonitor() {
-    _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) {
+    _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
-        setState(() {
-          _cpuInfo = 'CPU: ${SystemInfo.cpuUsage.toStringAsFixed(1)}%';
-          final temp = SystemInfo.batteryTemperature;
-          _tempInfo = '🌡️ Temp: ${temp != null ? temp.toStringAsFixed(1) : 'N/A'} °C';
-        });
+        try {
+          // Gọi các phương thức async từ SystemInfoPlus (đúng theo tài liệu)
+          final cpu = await SystemInfoPlus.cpuUsage;
+          final temp = await SystemInfoPlus.batteryTemperature;
+          setState(() {
+            _cpuInfo = 'CPU: ${cpu?.toStringAsFixed(1) ?? 'N/A'}%';
+            _tempInfo = '🌡️ Temp: ${temp?.toStringAsFixed(1) ?? 'N/A'} °C';
+          });
+        } catch (e) {
+          // Nếu có lỗi, hiển thị thông báo
+          if (mounted) {
+            setState(() {
+              _cpuInfo = 'CPU: N/A';
+              _tempInfo = '🌡️ Temp: N/A';
+            });
+          }
+        }
       }
     });
   }
