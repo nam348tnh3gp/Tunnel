@@ -35,7 +35,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   StreamSubscription? _stdoutSub;
   StreamSubscription? _stderrSub;
   String _log = '';
-  String _binaryPath = '';
+  String _cloudflaredPath = '';
+  String _prootPath = '';
   bool _binaryReady = false;
 
   String _cpuInfo = '';
@@ -68,28 +69,33 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       try {
         nativeDir = await _nativeChannel.invokeMethod('getNativeLibraryDir');
       } catch (e) {
-        _appendLog('⚠️ Cannot get native dir via channel, fallback...');
+        _appendLog('⚠️ Cannot get native dir, fallback...');
       }
 
       if (nativeDir != null && nativeDir.isNotEmpty) {
-        final String binaryPath = '$nativeDir/libcloudflared.so';
-        final File binaryFile = File(binaryPath);
-        if (await binaryFile.exists()) {
-          await Process.run('chmod', ['755', binaryPath]);
-          setState(() {
-            _binaryPath = binaryPath;
-            _binaryReady = true;
-          });
-          _appendLog('✅ Cloudflared binary ready from native libs');
+        final String cfPath = '$nativeDir/libcloudflared.so';
+        final String prPath = '$nativeDir/libproot.so';
+
+        if (File(cfPath).existsSync()) {
+          await Process.run('chmod', ['755', cfPath]);
+          _cloudflaredPath = cfPath;
+        }
+        if (File(prPath).existsSync()) {
+          await Process.run('chmod', ['755', prPath]);
+          _prootPath = prPath;
+        }
+
+        if (_cloudflaredPath.isNotEmpty) {
+          setState(() => _binaryReady = true);
+          _appendLog('✅ Cloudflared ready from native libs');
+          if (_prootPath.isNotEmpty) _appendLog('✅ Proot ready');
           return;
-        } else {
-          _appendLog('⚠️ libcloudflared.so not found in native lib dir, fallback...');
         }
       }
 
       await _fallbackInitBinary();
     } catch (e) {
-      _appendLog('❌ Error initializing binary: $e');
+      _appendLog('❌ Error: $e');
       await _fallbackInitBinary();
     }
   }
@@ -97,19 +103,28 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   Future<void> _fallbackInitBinary() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
-      final String binaryPath = '${dir.path}/cloudflared';
-      final File file = File(binaryPath);
 
-      if (!await file.exists()) {
+      // Cloudflared
+      final String cfPath = '${dir.path}/cloudflared';
+      if (!File(cfPath).existsSync()) {
         final data = await rootBundle.load('assets/cloudflared');
-        await file.writeAsBytes(data.buffer.asUint8List(), flush: true);
-        await Process.run('chmod', ['755', binaryPath]);
+        await File(cfPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
+        await Process.run('chmod', ['755', cfPath]);
       }
-      setState(() {
-        _binaryPath = binaryPath;
-        _binaryReady = true;
-      });
-      _appendLog('✅ Cloudflared binary ready (fallback)');
+      _cloudflaredPath = cfPath;
+
+      // Proot
+      final String prPath = '${dir.path}/proot';
+      if (!File(prPath).existsSync()) {
+        final data = await rootBundle.load('assets/proot');
+        await File(prPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
+        await Process.run('chmod', ['755', prPath]);
+      }
+      _prootPath = prPath;
+
+      setState(() => _binaryReady = true);
+      _appendLog('✅ Cloudflared ready (fallback)');
+      _appendLog('✅ Proot ready (fallback)');
     } catch (e) {
       _appendLog('❌ Fallback failed: $e');
     }
@@ -144,11 +159,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
   void _startTunnel() async {
     if (!_binaryReady) {
-      _appendLog('⏳ Binary not ready, please wait...');
+      _appendLog('⏳ Binary not ready');
       return;
     }
     if (_isRunning) {
-      _appendLog('⚠️ Tunnel is already running');
+      _appendLog('⚠️ Tunnel already running');
       return;
     }
 
@@ -161,7 +176,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     } else {
       final token = _tokenController.text.trim();
       if (token.isEmpty) {
-        _appendLog('❌ Please enter Token or select Try mode');
+        _appendLog('❌ Please enter Token');
         return;
       }
       args = ['tunnel', '--token', token];
@@ -169,14 +184,30 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      // Gọi binary trực tiếp, không qua shell
+      // Tạo resolv.conf giả
+      final tempDir = await getTemporaryDirectory();
+      final resolvFile = File('${tempDir.path}/resolv.conf');
+      await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
+
+      String cmd;
+      final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
+
+      if (hasProot) {
+        // Dùng proot mount resolv.conf
+        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
+        _appendLog('🛡️ Using proot for DNS bypass');
+      } else {
+        // Chạy trực tiếp
+        cmd = '$_cloudflaredPath ${args.join(' ')}';
+        _appendLog('⚠️ Proot not available, running directly');
+      }
+
       _process = await Process.start(
-        _binaryPath,
-        args,
+        '/system/bin/sh',
+        ['-c', cmd],
         runInShell: false,
-        mode: ProcessStartMode.normal,
         environment: {
-          'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
+          'PATH': '/system/bin:/system/xbin:/vendor/bin',
           'ANDROID_ROOT': '/system',
           'LD_LIBRARY_PATH': '/system/lib64:/vendor/lib64',
         },
@@ -220,7 +251,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       _stderrSub?.cancel();
       setState(() {
         _isRunning = false;
-        _appendLog('🛑 Sent stop signal to tunnel');
+        _appendLog('🛑 Stopped');
       });
     }
   }
@@ -228,10 +259,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Cloudflare Tunnel'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: Text('Cloudflare Tunnel'), centerTitle: true),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -308,10 +336,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 8),
 
-            const Text(
-              '📋 Log:',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
+            const Text('📋 Log:', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
             Expanded(
               child: Container(
@@ -323,7 +348,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                 child: SingleChildScrollView(
                   reverse: true,
                   child: Text(
-                    _log.isEmpty ? 'Waiting for actions...' : _log,
+                    _log.isEmpty ? 'Waiting...' : _log,
                     style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
                   ),
                 ),
