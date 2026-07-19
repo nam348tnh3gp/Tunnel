@@ -1,5 +1,5 @@
 name: tunnel_controller
-description: tunnel
+description: Cloudflare Tunnel Controller
 version: 1.0.0
 
 environment:
@@ -8,9 +8,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  path_provider: ^2.1.0          # Lấy thư mục ứng dụng
-  permission_handler: ^11.0.0    # Xin quyền (nếu cần)
-  system_info_plus: ^0.0.6       # Lấy CPU, nhiệt độ
+  path_provider: ^2.1.0
+  permission_handler: ^11.0.0
+  device_info_ce: ^1.0.0   # 👈 Thay thế system_info_plus
 
 dev_dependencies:
   flutter_test:
@@ -20,4 +20,4 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/cloudflared         # Khai báo để Flutter nhúng vào APK
+    - assets/cloudflared
