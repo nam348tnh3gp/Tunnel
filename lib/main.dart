@@ -57,22 +57,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.dispose();
   }
 
-  // -------------------- Yêu cầu quyền chủ động --------------------
   Future<void> _requestPermissions() async {
-    // Storage (để fallback copy binary)
     await Permission.storage.request();
-    
-    // Quyền mạng (dù đã khai báo, vẫn yêu cầu để đảm bảo)
-    // Trên Android, INTERNET không cần xin động, nhưng vẫn kiểm tra
-    // Thực tế, quyền INTERNET được cấp tự động khi cài app.
-    // Tuy nhiên, một số thiết bị có thể hạn chế, ta yêu cầu thêm.
-    if (await Permission.phone.isDenied) {
-      await Permission.phone.request();
-    }
     _appendLog('✅ Permissions requested');
   }
 
-  // -------------------- Binary setup (ưu tiên native lib) --------------------
   Future<void> _initBinary() async {
     try {
       String? nativeDir;
@@ -126,7 +115,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- System monitor --------------------
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
@@ -154,7 +142,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     setState(() => _log += '\n$msg');
   }
 
-  // -------------------- Tunnel control (sửa lỗi DNS) --------------------
   void _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready, please wait...');
@@ -165,27 +152,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       return;
     }
 
-    // Kiểm tra quyền mạng (dù không cần nhưng để an tâm)
-    if (await Permission.phone.isDenied) {
-      _appendLog('⚠️ Phone permission not granted, requesting...');
-      await Permission.phone.request();
-      if (await Permission.phone.isDenied) {
-        _appendLog('❌ Permission denied, cannot start tunnel');
-        return;
-      }
-    }
-
     final port = int.tryParse(_portController.text.trim()) ?? 8080;
     List<String> args;
 
     if (_useTryMode) {
-      args = [
-        'tunnel',
-        '--url',
-        'http://localhost:$port',
-        '--dns',
-        '1.1.1.1', // DNS rõ ràng để tránh lỗi
-      ];
+      args = ['tunnel', '--url', 'http://localhost:$port'];
       _appendLog('🚀 Starting Try Cloudflared on port $port');
     } else {
       final token = _tokenController.text.trim();
@@ -198,17 +169,16 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      // Chạy qua shell với đầy đủ environment
-      final String cmd = [_binaryPath, ...args].join(' ');
+      // Gọi binary trực tiếp, không qua shell
       _process = await Process.start(
-        '/system/bin/sh',
-        ['-c', cmd],
+        _binaryPath,
+        args,
         runInShell: false,
+        mode: ProcessStartMode.normal,
         environment: {
           'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
           'ANDROID_ROOT': '/system',
           'LD_LIBRARY_PATH': '/system/lib64:/vendor/lib64',
-          'DNS': '1.1.1.1',
         },
       );
 
@@ -255,7 +225,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- UI Build --------------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
