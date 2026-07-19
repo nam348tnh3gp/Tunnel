@@ -24,38 +24,41 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      # Tạo project Flutter mới (có cấu hình Gradle mới nhất)
       - name: Create Flutter project
         run: |
           flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
-          # Xóa các file mặc định
           rm -rf tunnel_app/lib tunnel_app/pubspec.yaml tunnel_app/assets
-          # Copy code và assets từ thư mục gốc vào
           cp -r lib tunnel_app/
           cp pubspec.yaml tunnel_app/
-          cp -r assets tunnel_app/ 2>/dev/null || mkdir -p tunnel_app/assets
+          mkdir -p tunnel_app/assets
           cd tunnel_app
           flutter pub get
 
-      # 👇 SỬA targetSdkVersion xuống 28 (quan trọng để chạy binary)
-      - name: Set targetSdkVersion to 28
+      # 👇 Cấu hình Native Library (GIẢI PHÁP CỘNG ĐỒNG)
+      - name: Setup native library
         run: |
           cd tunnel_app
-          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 28/g' android/app/build.gradle
+          
+          # Tạo thư mục jniLibs cho ARM64
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          
+          # Tải binary cloudflared và đổi tên thành libcloudflared.so
+          wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-      # Tải binary cloudflared và đặt vào assets
-      - name: Download cloudflared binary
-        run: |
-          wget -O tunnel_app/assets/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
-          chmod +x tunnel_app/assets/cloudflared
+          # Thêm packagingOptions vào build.gradle để buộc giải nén .so
+          sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-      # Build APK
+          # (Tùy chọn) Vẫn giữ binary trong assets để fallback
+          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
+          chmod +x assets/cloudflared
+
       - name: Build APK
         run: |
           cd tunnel_app
           flutter build apk --release --split-per-abi
 
-      # Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
