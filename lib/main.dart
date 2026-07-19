@@ -56,31 +56,56 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   }
 
   Future<void> _requestPermissions() async {
-    // Cần xin thêm quyền INTERNET (đã có sẵn trong manifest)
     await Permission.storage.request();
   }
 
-  // -------------------- Binary setup (đã sửa) --------------------
+  // -------------------- Binary setup (GIẢI PHÁP CỘNG ĐỒNG) --------------------
   Future<void> _initBinary() async {
     try {
-      // Dùng thư mục tạm để đảm bảo quyền thực thi
-      final dir = await getTemporaryDirectory();
-      final binaryPath = '${dir.path}/cloudflared';
-      final file = File(binaryPath);
+      // Lấy đường dẫn thư mục native library (nơi .so được giải nén)
+      final String nativeDir = (await getApplicationSupportDirectory()).path;
+      final String binaryPath = '$nativeDir/libcloudflared.so';
+      final File binaryFile = File(binaryPath);
+
+      if (await binaryFile.exists()) {
+        // Đảm bảo quyền thực thi (mặc dù đã có)
+        await Process.run('chmod', ['755', binaryPath]);
+        setState(() {
+          _binaryPath = binaryPath;
+          _binaryReady = true;
+        });
+        _appendLog('✅ Cloudflared binary ready (native lib)');
+        return;
+      }
+
+      // Fallback: nếu không tìm thấy, thử copy từ assets vào app directory
+      _appendLog('⚠️ Binary not found in native libs, fallback...');
+      await _fallbackInitBinary();
+    } catch (e) {
+      _appendLog('❌ Error initializing binary: $e');
+      await _fallbackInitBinary();
+    }
+  }
+
+  // Fallback: copy từ assets vào thư mục documents (yêu cầu targetSdkVersion <= 28)
+  Future<void> _fallbackInitBinary() async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final String binaryPath = '${dir.path}/cloudflared';
+      final File file = File(binaryPath);
 
       if (!await file.exists()) {
         final data = await rootBundle.load('assets/cloudflared');
         await file.writeAsBytes(data.buffer.asUint8List(), flush: true);
-        // Cấp quyền 755 (rwxr-xr-x)
         await Process.run('chmod', ['755', binaryPath]);
       }
       setState(() {
         _binaryPath = binaryPath;
         _binaryReady = true;
       });
-      _appendLog('✅ Cloudflared binary is ready');
+      _appendLog('✅ Cloudflared binary ready (fallback)');
     } catch (e) {
-      _appendLog('❌ Error initializing binary: $e');
+      _appendLog('❌ Fallback failed: $e');
     }
   }
 
@@ -112,7 +137,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     setState(() => _log += '\n$msg');
   }
 
-  // -------------------- Tunnel control (đã sửa) --------------------
+  // -------------------- Tunnel control --------------------
   void _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready, please wait...');
@@ -140,13 +165,17 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      // Chạy binary với runInShell: true để vượt qua SELinux
+      // Chạy binary trực tiếp (không cần shell wrapper)
       _process = await Process.start(
         _binaryPath,
         args,
-        runInShell: true,
+        runInShell: false,
         mode: ProcessStartMode.normal,
+        environment: {
+          'PATH': '/system/bin:/system/xbin:/vendor/bin',
+        },
       );
+
       _isRunning = true;
       setState(() {});
       _appendLog('✅ Tunnel started (PID: ${_process!.pid})');
