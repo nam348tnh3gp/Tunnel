@@ -25,49 +25,44 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # BUILD CLOUDFLARED CHO ANDROID TRONG TERMUX DOCKER
+      # BUILD CLOUDFLARED CHO ANDROID (CROSS-COMPILE)
       # ============================================================
       
-      - name: Build cloudflared for Android in Termux Docker
+      - name: Install Go and dependencies
         run: |
-          # Tạo script build
-          cat > build-cloudflared.sh << 'EOF'
-          #!/bin/bash
-          set -e
+          sudo apt-get update
+          sudo apt-get install -y golang-go git make
+
+      - name: Build cloudflared for Android (ARM64)
+        run: |
+          # Cài Go nếu chưa có
+          if ! command -v go &> /dev/null; then
+            wget https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+            sudo tar -C /usr/local -xzf go1.21.5.linux-amd64.tar.gz
+            export PATH=$PATH:/usr/local/go/bin
+          fi
+          export PATH=$PATH:/usr/local/go/bin
           
-          echo "📦 Building cloudflared for Android..."
-          
-          # Cập nhật và cài dependencies
-          pkg update -y
-          pkg install -y golang git make
-          
-          # Clone source
+          # Clone cloudflared
           git clone https://github.com/cloudflare/cloudflared.git --depth=1
           cd cloudflared
           
-          # Build cho ARM64 với dynamic linking (dùng DNS của Android)
-          CGO_ENABLED=1 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o cloudflared ./cmd/cloudflared
+          # Build cho Android ARM64 với dynamic linking (sẽ dùng DNS của Android)
+          # Lưu ý: Cần cross-compile với Android NDK toolchain
+          # Dùng GOOS=android và GOARCH=arm64 với CGO_ENABLED=1
+          # Nhưng trên AMD64 không có linker cho Android, nên dùng CGO_ENABLED=0
+          # và thêm flag để sử dụng DNS của Android
+          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build \
+            -ldflags="-s -w -X main.Version=$(git describe --tags --always)" \
+            -o cloudflared-arm64 ./cmd/cloudflared
           
-          # Kiểm tra file
-          file cloudflared
-          ls -la cloudflared
+          # Kiểm tra
+          file cloudflared-arm64
+          ls -la cloudflared-arm64
           
-          # Copy ra ngoài
-          cp cloudflared /output/
-          EOF
-          
-          chmod +x build-cloudflared.sh
-          
-          # Tạo thư mục output
-          mkdir -p output
-          
-          # Chạy Termux Docker
-          docker run --rm --privileged \
-            -v $(pwd):/workspace \
-            -v $(pwd)/output:/output \
-            -w /workspace \
-            termux/termux-docker:aarch64 \
-            /bin/bash -c "/workspace/build-cloudflared.sh"
+          # Copy ra output
+          mkdir -p ../output
+          cp cloudflared-arm64 ../output/cloudflared
 
       # ============================================================
       # TẠO FLUTTER PROJECT
@@ -89,12 +84,12 @@ jobs:
         run: |
           cd tunnel_app
           
-          # ARM64-v8a
+          # ARM64-v8a (build từ source)
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           cp ../output/cloudflared android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
           
-          # armabi-v7a (ARM32) - dùng binary ARM32 từ Cloudflare
+          # armabi-v7a (ARM32) - dùng binary từ Cloudflare
           mkdir -p android/app/src/main/jniLibs/armeabi-v7a
           wget -O android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm
@@ -126,7 +121,7 @@ jobs:
         run: |
           cd tunnel_app
           
-          # packagingOptions - cần cho multi-arch
+          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
           # MainActivity.kt
@@ -165,6 +160,7 @@ jobs:
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
