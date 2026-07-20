@@ -25,60 +25,28 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # BUILD PROOT TRONG DOCKER TERMUX (Môi trường chính xác)
+      # BUILD PROOT + LOADER BẰNG build-proot-android (Cộng đồng)
       # ============================================================
       
-      - name: Build proot and loader using Termux Docker
+      - name: Build proot and loader using build-proot-android
         run: |
-          # Tạo script build để chạy bên trong container Termux
-          cat > build-proot.sh << 'EOF'
-          #!/data/data/com.termux/files/usr/bin/bash
-          set -e
+          # Clone công cụ build của cộng đồng
+          git clone https://github.com/green-green-avk/build-proot-android
+          cd build-proot-android
           
-          echo "=== Installing build dependencies ==="
-          pkg update -y
-          pkg install -y binutils make gcc libtalloc-dev uthash-dev libarchive-dev git
+          # Cấu hình chỉ build cho ARM64 (aarch64)
+          sed -i 's/^ARCHS=.*/ARCHS="aarch64"/' config
           
-          echo "=== Cloning Termux proot source ==="
-          git clone https://github.com/termux/proot.git
-          cd proot/src
+          # Chạy script build (tự động tải NDK và build)
+          ./build.sh
           
-          echo "=== Building proot and loader ==="
-          # Build config
-          make build.h
+          # Tạo thư mục output và copy file
+          mkdir -p ../output
+          cp build/root-aarch64/root/bin/proot ../output/
+          cp build/root-aarch64/root/libexec/proot/loader ../output/loader.elf
           
-          # Build loader (Termux tự động xử lý cả 32 và 64-bit)
-          make loader.elf loader-m32.elf
-          
-          # Build proot binary
-          make proot
-          
+          cd ..
           echo "=== Build completed ==="
-          ls -la proot loader.elf loader-m32.elf
-          
-          # Copy ra ngoài volume
-          cp proot /output/
-          cp loader.elf /output/
-          cp loader-m32.elf /output/ 2>/dev/null || true
-          EOF
-          
-          chmod +x build-proot.sh
-          
-          # Tạo thư mục output để nhận file từ container
-          mkdir -p output
-          
-          # Chạy Docker Termux và mount volume
-          # Sử dụng --privileged để tránh lỗi personality() trên ARM containers[reference:2]
-          docker run --rm \
-            --privileged \
-            -v $(pwd):/workspace \
-            -v $(pwd)/output:/output \
-            -w /workspace \
-            termux/termux-docker:aarch64 \
-            /bin/bash -c "/workspace/build-proot.sh"
-          
-          # Kiểm tra output
-          echo "=== Output files ==="
           ls -la output/
 
       # ============================================================
@@ -104,7 +72,7 @@ jobs:
           cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           
-          # Proot loader (64-bit)
+          # Proot loader
           cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
 
