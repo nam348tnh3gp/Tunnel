@@ -228,6 +228,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       return;
     }
 
+    // 👇 Reset URL khi start tunnel mới
+    _tunnelUrl = '';
+    setState(() {});
+
     final port = int.tryParse(_portController.text.trim()) ?? 8080;
     List<String> args = [];
 
@@ -309,21 +313,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       _stdoutSub = _process!.stdout.transform(utf8.decoder).listen((data) {
         _appendLog('[OUT] $data');
-        // Extract tunnel URL from Try mode
-        if (_useTryMode) {
-          final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
-          if (match != null) {
+        // Extract tunnel URL
+        final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
+        if (match != null) {
+          setState(() {
             _tunnelUrl = match.group(0)!;
-            _appendLog('🔗 Public URL: $_tunnelUrl');
-          }
-        }
-        // Extract URL from token mode (named tunnel)
-        if (!_useTryMode) {
-          final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
-          if (match != null) {
-            _tunnelUrl = match.group(0)!;
-            _appendLog('🔗 Tunnel URL: $_tunnelUrl');
-          }
+          });
+          _appendLog('🔗 Public URL: $_tunnelUrl');
         }
       });
 
@@ -333,7 +329,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         if (_tunnelUrl.isEmpty) {
           final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
           if (match != null) {
-            _tunnelUrl = match.group(0)!;
+            setState(() {
+              _tunnelUrl = match.group(0)!;
+            });
             _appendLog('🔗 Public URL: $_tunnelUrl');
           }
         }
@@ -357,8 +355,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       _process!.kill(ProcessSignal.sigterm);
       _stdoutSub?.cancel();
       _stderrSub?.cancel();
+      
+      // 👇 Reset URL khi stop tunnel
       setState(() {
         _isRunning = false;
+        _tunnelUrl = '';
         _appendLog('🛑 Stopped');
       });
     }
