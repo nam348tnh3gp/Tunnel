@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_ce/device_info_ce.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData; // 👈 Copy log
 
 const MethodChannel _nativeChannel = MethodChannel('com.yourcompany.tunnel_controller/native');
 
@@ -40,9 +41,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _prootLoaderPath = '';
   bool _binaryReady = false;
 
+  // Hệ thống thông tin
   String _cpuInfo = '';
   String _tempInfo = '';
   Timer? _systemTimer;
+
+  // Scroll controller cho log
+  final ScrollController _logScrollController = ScrollController();
 
   @override
   void initState() {
@@ -56,14 +61,17 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   void dispose() {
     _stopTunnel();
     _systemTimer?.cancel();
+    _logScrollController.dispose();
     super.dispose();
   }
 
+  // -------------------- Quyền --------------------
   Future<void> _requestPermissions() async {
     await Permission.storage.request();
     _appendLog('✅ Permissions requested');
   }
 
+  // -------------------- Binary setup --------------------
   Future<void> _initBinary() async {
     try {
       String? nativeDir;
@@ -151,6 +159,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
+  // -------------------- System monitor (CHÚ Ý: có thể không hoạt động trên một số thiết bị) --------------------
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
@@ -165,8 +174,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         } catch (e) {
           if (mounted) {
             setState(() {
-              _cpuInfo = 'CPU: N/A';
-              _tempInfo = '🌡️ Temp: N/A';
+              _cpuInfo = 'CPU: N/A (not supported)';  // 👈 Nhận xét
+              _tempInfo = '🌡️ Temp: N/A (not supported)'; // 👈 Nhận xét
             });
           }
         }
@@ -174,10 +183,44 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
+  // -------------------- Log helper --------------------
   void _appendLog(String msg) {
-    setState(() => _log += '\n$msg');
+    setState(() {
+      _log += '\n$msg';
+    });
+    // Tự động scroll xuống cuối
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_logScrollController.hasClients) {
+        _logScrollController.animateTo(
+          _logScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 100),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
+  // -------------------- COPY LOG --------------------
+  Future<void> _copyLog() async {
+    if (_log.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('📋 Log is empty')),
+      );
+      return;
+    }
+    try {
+      await Clipboard.setData(ClipboardData(text: _log));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Log copied to clipboard!')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('❌ Failed to copy: $e')),
+      );
+    }
+  }
+
+  // -------------------- Tunnel control --------------------
   void _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready');
@@ -286,10 +329,29 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
+  // -------------------- UI Build --------------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('Cloudflare Tunnel'), centerTitle: true),
+      appBar: AppBar(
+        title: const Text('Cloudflare Tunnel'),
+        centerTitle: true,
+        actions: [
+          // 👇 Nút copy log
+          IconButton(
+            icon: const Icon(Icons.copy),
+            tooltip: 'Copy Log',
+            onPressed: _copyLog,
+          ),
+          IconButton(
+            icon: const Icon(Icons.clear_all),
+            tooltip: 'Clear Log',
+            onPressed: () {
+              setState(() => _log = '');
+            },
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -366,7 +428,18 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 8),
 
-            const Text('📋 Log:', style: TextStyle(fontWeight: FontWeight.bold)),
+            Row(
+              children: [
+                const Text('📋 Log:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Spacer(),
+                // Nút copy log nằm ở đây (thay thế)
+                TextButton.icon(
+                  onPressed: _copyLog,
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('Copy'),
+                ),
+              ],
+            ),
             const SizedBox(height: 4),
             Expanded(
               child: Container(
@@ -376,7 +449,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: SingleChildScrollView(
-                  reverse: true,
+                  controller: _logScrollController,
+                  reverse: false,
                   child: Text(
                     _log.isEmpty ? 'Waiting...' : _log,
                     style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
