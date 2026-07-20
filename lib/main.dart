@@ -29,11 +29,12 @@ class TunnelControlPage extends StatefulWidget {
 class _TunnelControlPageState extends State<TunnelControlPage> {
   final TextEditingController _tokenController = TextEditingController();
   final TextEditingController _portController = TextEditingController(text: '8080');
-  final TextEditingController _customCommandController = TextEditingController(); // 👈 Ô nhập lệnh tùy chỉnh
+  final TextEditingController _customCommandController = TextEditingController();
 
   bool _useTryMode = false;
   bool _isRunning = false;
   bool _permissionsGranted = false;
+  bool _bootstrapDone = false;
 
   Process? _process;
   StreamSubscription? _stdoutSub;
@@ -42,6 +43,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _cloudflaredPath = '';
   String _prootPath = '';
   String _prootLoaderPath = '';
+  String _runInRootfsPath = '';
   String _nativeDir = '';
   bool _binaryReady = false;
 
@@ -56,6 +58,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.initState();
     _requestPermissions().then((_) {
       _initBinary();
+      _bootstrapTermux();
       _startSystemMonitor();
     });
   }
@@ -69,6 +72,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.dispose();
   }
 
+  // ==================== PERMISSIONS ====================
   Future<void> _requestPermissions() async {
     _appendLog('🔑 Requesting all permissions...');
 
@@ -93,23 +97,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
     }
 
-    final storageGranted = await Permission.storage.isGranted;
-    final manageGranted = await Permission.manageExternalStorage.isGranted;
-    if (storageGranted || manageGranted) {
-      _permissionsGranted = true;
-      _appendLog('✅ All critical permissions granted');
-    } else {
-      _appendLog('⚠️ Some permissions missing, may affect functionality');
-      _permissionsGranted = true;
-    }
+    _permissionsGranted = true;
+    _appendLog('✅ All critical permissions granted');
   }
 
+  // ==================== INIT BINARY ====================
   Future<void> _initBinary() async {
-    if (!_permissionsGranted) {
-      _appendLog('⏳ Waiting for permissions...');
-      await Future.delayed(Duration(seconds: 2));
-    }
-
     try {
       String? nativeDir;
       try {
@@ -122,98 +115,125 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _nativeDir = nativeDir;
         _appendLog('📁 Native dir: $_nativeDir');
 
-        // Cloudflared
         final String cfPath = '$nativeDir/libcloudflared.so';
         if (File(cfPath).existsSync()) {
           await Process.run('chmod', ['755', cfPath]);
           _cloudflaredPath = cfPath;
-          _appendLog('✅ Cloudflared ready from native libs');
-        } else {
-          _appendLog('❌ Cloudflared not found in native libs');
+          _appendLog('✅ Cloudflared ready');
         }
 
-        // Proot
         final String prPath = '$nativeDir/libproot.so';
         if (File(prPath).existsSync()) {
           await Process.run('chmod', ['755', prPath]);
           _prootPath = prPath;
-          _appendLog('✅ Proot ready from native libs');
-        } else {
-          _appendLog('❌ Proot not found in native libs');
+          _appendLog('✅ Proot ready');
         }
 
-        // Proot loader
         final String loaderPath = '$nativeDir/libproot_loader.so';
         if (File(loaderPath).existsSync()) {
           await Process.run('chmod', ['755', loaderPath]);
           _prootLoaderPath = loaderPath;
-          _appendLog('✅ Proot loader ready from native libs');
-        } else {
-          _appendLog('❌ Proot loader not found in native libs');
+          _appendLog('✅ Proot loader ready');
         }
 
-        // Kiểm tra các thư viện phụ
         final libs = ['libtalloc.so', 'libandroid-shmem.so'];
         for (var lib in libs) {
           final libPath = '$nativeDir/$lib';
           if (File(libPath).existsSync()) {
             await Process.run('chmod', ['755', libPath]);
             _appendLog('✅ $lib ready');
-          } else {
-            _appendLog('⚠️ $lib not found');
           }
         }
 
         if (_cloudflaredPath.isNotEmpty) {
           setState(() => _binaryReady = true);
-          return;
+        }
+      }
+    } catch (e) {
+      _appendLog('❌ Init binary error: $e');
+    }
+  }
+
+  // ==================== BOOTSTRAP TERMUX ROOTFS ====================
+  Future<void> _bootstrapTermux() async {
+    try {
+      _appendLog('📦 Running Termux-style bootstrap...');
+
+      final appDir = await getApplicationDocumentsDirectory();
+
+      // Kiểm tra rootfs đã tồn tại chưa
+      final rootfsDir = Directory('${appDir.path}/rootfs');
+      final runScript = File('${appDir.path}/run-in-rootfs.sh');
+
+      if (await rootfsDir.exists() && await runScript.exists()) {
+        _runInRootfsPath = runScript.path;
+        _bootstrapDone = true;
+        _appendLog('✅ Rootfs already exists, skipping bootstrap');
+        return;
+      }
+
+      // Giải nén bootstrap script từ assets
+      final bootstrapData = await rootBundle.loadString('assets/bootstrap.sh');
+      final bootstrapFile = File('${appDir.path}/bootstrap.sh');
+      await bootstrapFile.writeAsString(bootstrapData);
+      await Process.run('chmod', ['755', bootstrapFile.path]);
+
+      // Copy binary và thư viện vào thư mục files để script dùng
+      final files = {
+        'proot': _prootPath,
+        'proot_loader': _prootLoaderPath,
+        'libtalloc.so': '$_nativeDir/libtalloc.so',
+        'libandroid-shmem.so': '$_nativeDir/libandroid-shmem.so',
+      };
+
+      for (var entry in files.entries) {
+        final src = entry.value;
+        final dest = '${appDir.path}/${entry.key}';
+        if (File(src).existsSync()) {
+          await File(src).copy(dest);
+          await Process.run('chmod', ['755', dest]);
+          _appendLog('✅ Copied ${entry.key}');
+        } else {
+          _appendLog('⚠️ ${entry.key} not found at $src');
         }
       }
 
-      await _fallbackInitBinary();
+      // Copy cloudflared vào thư mục files
+      if (File(_cloudflaredPath).existsSync()) {
+        await File(_cloudflaredPath).copy('${appDir.path}/cloudflared');
+        await Process.run('chmod', ['755', '${appDir.path}/cloudflared']);
+        _appendLog('✅ Copied cloudflared');
+      }
+
+      // Chạy bootstrap script
+      final result = await Process.run(
+        '/system/bin/sh',
+        [bootstrapFile.path],
+        runInShell: false,
+      );
+
+      if (result.stdout.toString().isNotEmpty) {
+        _appendLog('[BOOTSTRAP] ${result.stdout}');
+      }
+      if (result.stderr.toString().isNotEmpty) {
+        _appendLog('[BOOTSTRAP ERR] ${result.stderr}');
+      }
+
+      // Kiểm tra script run-in-rootfs đã được tạo
+      if (await runScript.exists()) {
+        _runInRootfsPath = runScript.path;
+        await Process.run('chmod', ['755', _runInRootfsPath]);
+        _bootstrapDone = true;
+        _appendLog('✅ Bootstrap completed successfully!');
+      } else {
+        _appendLog('❌ Bootstrap failed: run-in-rootfs.sh not found');
+      }
     } catch (e) {
-      _appendLog('❌ Error: $e');
-      await _fallbackInitBinary();
+      _appendLog('❌ Bootstrap error: $e');
     }
   }
 
-  Future<void> _fallbackInitBinary() async {
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-
-      final String cfPath = '${dir.path}/cloudflared';
-      if (!File(cfPath).existsSync()) {
-        final data = await rootBundle.load('assets/cloudflared');
-        await File(cfPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
-        await Process.run('chmod', ['755', cfPath]);
-      }
-      _cloudflaredPath = cfPath;
-
-      final String prPath = '${dir.path}/proot';
-      if (!File(prPath).existsSync()) {
-        final data = await rootBundle.load('assets/proot');
-        await File(prPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
-        await Process.run('chmod', ['755', prPath]);
-      }
-      _prootPath = prPath;
-
-      final String loaderPath = '${dir.path}/proot_loader';
-      if (!File(loaderPath).existsSync()) {
-        final data = await rootBundle.load('assets/proot_loader');
-        await File(loaderPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
-        await Process.run('chmod', ['755', loaderPath]);
-      }
-      _prootLoaderPath = loaderPath;
-
-      setState(() => _binaryReady = true);
-      _appendLog('✅ Cloudflared ready (fallback)');
-      _appendLog('✅ Proot ready (fallback)');
-      _appendLog('✅ Proot loader ready (fallback)');
-    } catch (e) {
-      _appendLog('❌ Fallback failed: $e');
-    }
-  }
-
+  // ==================== SYSTEM MONITOR ====================
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
@@ -237,10 +257,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
+  // ==================== LOG HELPER ====================
   void _appendLog(String msg) {
-    setState(() {
-      _log += '\n$msg';
-    });
+    setState(() => _log += '\n$msg');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_logScrollController.hasClients) {
         _logScrollController.animateTo(
@@ -271,83 +290,24 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- CUSTOM COMMAND EXECUTION --------------------
-  Future<void> _executeCustomCommand() async {
-    String command = _customCommandController.text.trim();
-    if (command.isEmpty) {
-      _appendLog('⚠️ Please enter a command');
+  // ==================== EXECUTE COMMAND IN ROOTFS ====================
+  Future<void> _executeInRootfs(String command) async {
+    if (!_bootstrapDone || _runInRootfsPath.isEmpty) {
+      _appendLog('⏳ Rootfs not ready');
       return;
     }
-
-    if (!_binaryReady) {
-      _appendLog('⏳ Binary not ready yet, please wait...');
-      return;
-    }
-
-    _appendLog('▶️ Executing: $command');
 
     try {
-      // Lấy thư mục cache và tạo /tmp
-      final cacheDir = await getTemporaryDirectory();
-      final tmpDir = cacheDir.path;
-      final tmpFolder = Directory('$tmpDir/tmp');
-      if (!await tmpFolder.exists()) {
-        await tmpFolder.create(recursive: true);
-      }
-      await Process.run('chmod', ['777', tmpFolder.path]);
+      // Escape command để truyền qua shell
+      final escapedCommand = command.replaceAll('"', '\\"');
+      final cmd = '$_runInRootfsPath "$escapedCommand"';
 
-      // Tạo resolv.conf giả (nếu cần)
-      final resolvFile = File('$tmpDir/resolv.conf');
-      if (!await resolvFile.exists()) {
-        await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
-      }
-
-      final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
-      final bool hasLoader = _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync();
-
-      String cmd;
-      if (hasProot && hasLoader) {
-        final String nativeDir = _nativeDir;
-        cmd = '$_prootPath '
-            '-b ${resolvFile.path}:/etc/resolv.conf '
-            '-b $nativeDir:$nativeDir '
-            '-b /system:/system '
-            '-b /vendor:/vendor '
-            '-b /proc:/proc '
-            '-b /dev:/dev '
-            '-b ${tmpFolder.path}:/tmp '
-            '-w $nativeDir '
-            '/bin/sh -c "$command"';
-        _appendLog('🛡️ Executing custom command inside proot');
-      } else if (hasProot) {
-        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -b ${tmpFolder.path}:/tmp -w $_nativeDir /bin/sh -c "$command"';
-        _appendLog('⚠️ Proot without loader');
-      } else {
-        cmd = '/system/bin/sh -c "$command"';
-        _appendLog('⚠️ Proot not available, running directly');
-      }
-
-      final String ldLibraryPath = _nativeDir.isNotEmpty
-          ? '$_nativeDir:/system/lib64:/vendor/lib64'
-          : '/system/lib64:/vendor/lib64';
-
-      final Map<String, String> env = {
-        'PATH': '/system/bin:/system/xbin:/vendor/bin',
-        'ANDROID_ROOT': '/system',
-        'LD_LIBRARY_PATH': ldLibraryPath,
-        'PROOT_TMP_DIR': '/tmp',
-        'PROOT_NO_SECCOMP': '1',
-        if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
-        'TMPDIR': '/tmp',
-        'PROOT_FORCE_GLIBC': '1',
-        'PROOT_IGNORE_MISSING_LOADER': '1',
-      };
+      _appendLog('▶️ Executing in rootfs: $command');
 
       final result = await Process.run(
         '/system/bin/sh',
         ['-c', cmd],
         runInShell: false,
-        environment: env,
       );
 
       if (result.stdout.toString().isNotEmpty) {
@@ -362,10 +322,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- TUNNEL CONTROL --------------------
+  // ==================== START TUNNEL ====================
   void _startTunnel() async {
-    if (!_binaryReady) {
-      _appendLog('⏳ Binary not ready');
+    if (!_binaryReady || !_bootstrapDone) {
+      _appendLog('⏳ Binary or rootfs not ready');
       return;
     }
     if (_isRunning) {
@@ -374,10 +334,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     final port = int.tryParse(_portController.text.trim()) ?? 8080;
-    List<String> args;
+    String args;
 
     if (_useTryMode) {
-      args = ['tunnel', '--url', 'http://localhost:$port'];
+      args = 'tunnel --url http://localhost:$port';
       _appendLog('🚀 Starting Try Cloudflared on port $port');
     } else {
       final token = _tokenController.text.trim();
@@ -385,79 +345,27 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _appendLog('❌ Please enter Token');
         return;
       }
-      args = ['tunnel', '--token', token];
+      args = 'tunnel --token $token';
       _appendLog('🔑 Starting tunnel with token');
     }
 
     try {
-      // Lấy thư mục cache của ứng dụng (thay thế /tmp)
-      final cacheDir = await getTemporaryDirectory();
-      final tmpDir = cacheDir.path;
+      // Chạy cloudflared bên trong rootfs
+      final command = 'cd $_nativeDir && ./cloudflared $args';
+      final escapedCommand = command.replaceAll('"', '\\"');
+      final cmd = '$_runInRootfsPath "$escapedCommand"';
 
-      // Tạo thư mục /tmp trong cache
-      final tmpFolder = Directory('$tmpDir/tmp');
-      if (!await tmpFolder.exists()) {
-        await tmpFolder.create(recursive: true);
-      }
-      await Process.run('chmod', ['777', tmpFolder.path]);
-
-      // Tạo resolv.conf giả
-      final resolvFile = File('$tmpDir/resolv.conf');
-      await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
-
-      _appendLog('📁 Cache dir: $tmpDir');
-      _appendLog('📁 /tmp mapped to: ${tmpFolder.path}');
-
-      String cmd;
-      final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
-      final bool hasLoader = _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync();
-
-      if (hasProot && hasLoader) {
-        final String nativeDir = _nativeDir;
-
-        cmd = '$_prootPath '
-            '-b ${resolvFile.path}:/etc/resolv.conf '
-            '-b $nativeDir:$nativeDir '
-            '-b /system:/system '
-            '-b /vendor:/vendor '
-            '-b /proc:/proc '
-            '-b /dev:/dev '
-            '-b ${tmpFolder.path}:/tmp '
-            '-w $nativeDir '
-            './libcloudflared.so ${args.join(' ')}';
-        _appendLog('🛡️ Using proot with /tmp bind mount (Termux-style)');
-      } else if (hasProot) {
-        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -b ${tmpFolder.path}:/tmp -w $_nativeDir ./libcloudflared.so ${args.join(' ')}';
-        _appendLog('⚠️ Proot without loader');
-      } else {
-        cmd = '$_cloudflaredPath ${args.join(' ')}';
-        _appendLog('⚠️ Proot not available, running directly');
-      }
-
-      final String ldLibraryPath = _nativeDir.isNotEmpty
-          ? '$_nativeDir:/system/lib64:/vendor/lib64'
-          : '/system/lib64:/vendor/lib64';
-
-      final Map<String, String> env = {
-        'PATH': '/system/bin:/system/xbin:/vendor/bin',
-        'ANDROID_ROOT': '/system',
-        'LD_LIBRARY_PATH': ldLibraryPath,
-        'PROOT_TMP_DIR': '/tmp',
-        'PROOT_NO_SECCOMP': '1',
-        if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
-        'TMPDIR': '/tmp',
-        'PROOT_FORCE_GLIBC': '1',
-        'PROOT_IGNORE_MISSING_LOADER': '1',
-      };
-
-      _appendLog('📁 PROOT_TMP_DIR: /tmp (mapped to ${tmpFolder.path})');
-      _appendLog('📁 LD_LIBRARY_PATH: $ldLibraryPath');
+      _appendLog('🛡️ Running tunnel inside Termux rootfs');
 
       _process = await Process.start(
         '/system/bin/sh',
         ['-c', cmd],
         runInShell: false,
-        environment: env,
+        environment: {
+          'PATH': '/usr/bin:/bin:/system/bin:/system/xbin:/vendor/bin',
+          'ANDROID_ROOT': '/system',
+          'TMPDIR': '/data/local/tmp',
+        },
       );
 
       _isRunning = true;
@@ -503,6 +411,17 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
+  // ==================== CUSTOM COMMAND ====================
+  Future<void> _executeCustomCommand() async {
+    String command = _customCommandController.text.trim();
+    if (command.isEmpty) {
+      _appendLog('⚠️ Please enter a command');
+      return;
+    }
+    await _executeInRootfs(command);
+  }
+
+  // ==================== UI ====================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -510,17 +429,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         title: const Text('Cloudflare Tunnel'),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.copy),
-            tooltip: 'Copy Log',
-            onPressed: _copyLog,
-          ),
+          IconButton(icon: const Icon(Icons.copy), onPressed: _copyLog),
           IconButton(
             icon: const Icon(Icons.clear_all),
-            tooltip: 'Clear Log',
-            onPressed: () {
-              setState(() => _log = '');
-            },
+            onPressed: () => setState(() => _log = ''),
           ),
         ],
       ),
@@ -529,7 +441,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // --- Mode và Port ---
+            // Mode
             DropdownButtonFormField<bool>(
               value: _useTryMode,
               items: const [
@@ -544,6 +456,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 12),
 
+            // Token
             if (!_useTryMode)
               TextField(
                 controller: _tokenController,
@@ -554,6 +467,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
             const SizedBox(height: 12),
 
+            // Port + Start/Stop
             Row(
               children: [
                 Expanded(
@@ -588,7 +502,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 12),
 
-            // --- CPU & Temp ---
+            // CPU & Temp
             Row(
               children: [
                 Icon(Icons.memory, size: 18),
@@ -602,7 +516,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 12),
 
-            // --- Custom Command Execution ---
+            // Custom Command
             Container(
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.grey.withOpacity(0.3)),
@@ -613,7 +527,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    '💻 Custom Command (shell)',
+                    '💻 Custom Command (in rootfs)',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   ),
                   const SizedBox(height: 4),
@@ -623,7 +537,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                         child: TextField(
                           controller: _customCommandController,
                           decoration: const InputDecoration(
-                            hintText: 'e.g. ls -la, ps aux, curl ifconfig.me',
+                            hintText: 'e.g. ls -la, apk add curl',
                             border: OutlineInputBorder(),
                             contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                           ),
@@ -648,7 +562,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 12),
 
-            // --- Log ---
+            // Log
             Row(
               children: [
                 const Text('📋 Log:', style: TextStyle(fontWeight: FontWeight.bold)),
