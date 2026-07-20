@@ -119,7 +119,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _nativeDir = nativeDir;
         _appendLog('📁 Native dir: $_nativeDir');
 
-        // Tạo /data/local/tmp
+        // Tạo /data/local/tmp và cấp quyền 777
         try {
           final tmpDir = Directory('/data/local/tmp');
           if (!await tmpDir.exists()) {
@@ -329,7 +329,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       if (hasProot && hasLoader) {
         final String nativeDir = _nativeDir;
-        // Dùng proot trực tiếp, không qua shell, set working directory = nativeDir
+        // 👇 GIẢI PHÁP CHÍNH: bind mount /data/local/tmp vào /tmp
+        // và thêm -w . để set working directory là thư mục hiện tại
         cmd = '$_prootPath '
             '-b ${resolvFile.path}:/etc/resolv.conf '
             '-b $nativeDir:$nativeDir '
@@ -337,12 +338,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             '-b /vendor:/vendor '
             '-b /proc:/proc '
             '-b /dev:/dev '
-            '-b /data/local/tmp:/tmp '
-            '-w $nativeDir '
-            '/libcloudflared.so ${args.join(' ')}';
-        _appendLog('🛡️ Using proot with bind mounts (no shell)');
+            '-b /data/local/tmp:/tmp '  // 👈 QUAN TRỌNG: mount /tmp
+            '-w . '                     // 👈 set working dir là thư mục hiện tại
+            './libcloudflared.so ${args.join(' ')}';
+        _appendLog('🛡️ Using proot with /tmp bind mount');
       } else if (hasProot) {
-        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -w $_nativeDir ./libcloudflared.so ${args.join(' ')}';
+        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -b /data/local/tmp:/tmp -w . ./libcloudflared.so ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader');
       } else {
         cmd = '$_cloudflaredPath ${args.join(' ')}';
@@ -357,7 +358,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
         'ANDROID_ROOT': '/system',
         'LD_LIBRARY_PATH': ldLibraryPath,
-        'PROOT_TMP_DIR': '/tmp',
+        'PROOT_TMP_DIR': '/tmp',  // 👈 Trỏ đến /tmp đã được bind mount
         'PROOT_NO_SECCOMP': '1',
         if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
       };
