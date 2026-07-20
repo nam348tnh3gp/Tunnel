@@ -39,11 +39,8 @@ jobs:
       - name: Build proot
         run: |
           cd proot-source
-          # Tạo loader và config trước
           make -C src loader.elf loader-m32.elf build.h
-          # Biên dịch proot và care
           make -C src proot care
-          # Kiểm tra file binary đã tạo
           ls -la src/proot
 
       - name: Create Flutter project
@@ -62,12 +59,12 @@ jobs:
           
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Tải cloudflared
+          # Cloudflared
           wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-          # Copy proot đã build từ source (đặt tên libproot.so)
+          # Proot (build từ source)
           cp ../proot-source/src/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
 
