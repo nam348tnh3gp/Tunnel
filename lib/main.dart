@@ -76,19 +76,25 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         final String cfPath = '$nativeDir/libcloudflared.so';
         final String prPath = '$nativeDir/libproot.so';
 
+        // Cloudflared: dùng trực tiếp từ native libs
         if (File(cfPath).existsSync()) {
           await Process.run('chmod', ['755', cfPath]);
           _cloudflaredPath = cfPath;
+          _appendLog('✅ Cloudflared ready');
         }
+
+        // Proot: copy ra thư mục files để chạy (tránh lỗi executable)
         if (File(prPath).existsSync()) {
-          await Process.run('chmod', ['755', prPath]);
-          _prootPath = prPath;
+          final dir = await getApplicationDocumentsDirectory();
+          final String destPath = '${dir.path}/proot';
+          await File(prPath).copy(destPath);
+          await Process.run('chmod', ['755', destPath]);
+          _prootPath = destPath;
+          _appendLog('✅ Proot copied to ${destPath}');
         }
 
         if (_cloudflaredPath.isNotEmpty) {
           setState(() => _binaryReady = true);
-          _appendLog('✅ Cloudflared ready from native libs');
-          if (_prootPath.isNotEmpty) _appendLog('✅ Proot ready');
           return;
         }
       }
@@ -193,7 +199,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
 
       if (hasProot) {
-        // Dùng proot mount resolv.conf
+        // Dùng proot mount resolv.conf (chạy từ thư mục files)
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
         _appendLog('🛡️ Using proot for DNS bypass');
       } else {
