@@ -137,7 +137,7 @@ jobs:
           cp ../output/*.so android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
           chmod +x android/app/src/main/jniLibs/arm64-v8a/*.so 2>/dev/null || true
           
-          # 👇 Copy vào assets (để fallback, tránh lỗi pubspec)
+          # Copy vào assets (để fallback, tránh lỗi pubspec)
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared 2>/dev/null || true
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot 2>/dev/null || true
           cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader 2>/dev/null || true
@@ -162,7 +162,7 @@ jobs:
           chmod +x assets/cloudflared
 
       # ============================================================
-      # CẤU HÌNH ANDROID (MainActivity, Manifest)
+      # CẤU HÌNH ANDROID (MainActivity, Manifest với đầy đủ quyền)
       # ============================================================
       - name: Configure Android
         run: |
@@ -199,13 +199,25 @@ jobs:
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.yourcompany.tunnel_controller">
+              <!-- Quyền mạng -->
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+              <!-- Quyền lưu trữ -->
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+
+              <!-- Quyền thông báo (Android 13+) -->
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
-                  android:usesCleartextTraffic="true">
+                  android:usesCleartextTraffic="true"
+                  android:requestLegacyExternalStorage="true">
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -229,10 +241,13 @@ jobs:
           </manifest>
           EOF
 
-      - name: Build APK
+      # ============================================================
+      # BUILD APK CHỈ CHO ARM64
+      # ============================================================
+      - name: Build APK (ARM64 only)
         run: |
           cd tunnel_app
-          flutter build apk --release --split-per-abi
+          flutter build apk --release --target-platform android-arm64
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
