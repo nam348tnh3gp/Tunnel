@@ -34,27 +34,28 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      # ------------------ TẢI PROOT TỪ TERMUX ------------------
-      - name: Download proot from Termux
+      # ------------------ TẢI BINARY CÓ SẴN (Phương án 1) ------------------
+      - name: Download proot binary from portable binaries
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Tải proot binary từ Termux repository (đã được vá)
+          # Tải proot (Termux fork) từ prebuilt repository
           wget -O android/app/src/main/jniLibs/arm64-v8a/libproot.so \
-            https://raw.githubusercontent.com/termux/proot/master/src/proot
+            https://github.com/skirsten/proot-portable-android-binaries/raw/main/aarch64/proot
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
 
-          # Tải loader từ Termux (nếu có)
-          wget -O android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so \
-            https://raw.githubusercontent.com/termux/proot/master/src/loader.elf || true
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so || true
-
-          # Tải cloudflared
+      - name: Download cloudflared binary
+        run: |
+          cd tunnel_app
           wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
+      - name: Configure native libraries
+        run: |
+          cd tunnel_app
+          
           # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
@@ -122,10 +123,8 @@ jobs:
           # Copy vào assets fallback
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
-          cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader 2>/dev/null || true
           chmod +x assets/cloudflared
           chmod +x assets/proot
-          chmod +x assets/proot_loader 2>/dev/null || true
 
       - name: Build APK
         run: |
