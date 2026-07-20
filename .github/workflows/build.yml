@@ -24,6 +24,34 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
+      # ------------------ BUILD PROOT + LOADER TỪ SOURCE ------------------
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-dev libtalloc-dev uthash-dev gcc-aarch64-linux-gnu
+
+      - name: Checkout Termux proot source
+        uses: actions/checkout@v4
+        with:
+          repository: termux/proot
+          path: proot-source
+
+      - name: Build proot and loader for ARM64
+        run: |
+          cd proot-source/src
+          
+          # Build loader cho ARM64 (aarch64)
+          # Sử dụng cross-compiler để build cho Android ARM64
+          export CC=aarch64-linux-gnu-gcc
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          
+          # Build loader và proot
+          make -f GNUmakefile loader.elf loader-m32.elf build.h
+          make -f GNUmakefile proot care
+          
+          # Kiểm tra file đã tạo
+          ls -la loader.elf proot
+
       - name: Create Flutter project
         run: |
           flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
@@ -34,33 +62,25 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      # ------------------ TẢI PROOT + LOADER (link chuẩn) ------------------
-      - name: Download proot and loader
+      - name: Setup native libraries
         run: |
           cd tunnel_app
+          
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Proot binary (Termux fork)
-          wget -O android/app/src/main/jniLibs/arm64-v8a/libproot.so \
-            https://skirsten.github.io/proot-portable-android-binaries/aarch64/proot
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
-
-          # Proot loader (từ Termux source)
-          wget -O android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so \
-            https://raw.githubusercontent.com/termux/proot/master/src/loader.elf
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
-
-      - name: Download cloudflared binary
-        run: |
-          cd tunnel_app
+          # Cloudflared
           wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-      - name: Configure native libraries
-        run: |
-          cd tunnel_app
-          
+          # Proot binary (build từ source Termux)
+          cp ../proot-source/src/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
+
+          # Proot loader (build từ source Termux) 👈 QUAN TRỌNG
+          cp ../proot-source/src/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+
           # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
@@ -126,12 +146,8 @@ jobs:
           EOF
 
           # Copy vào assets fallback
-          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
-          cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
-          cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
-          chmod +x assets/cloudflared
-          chmod +x assets/proot
-          chmod +x assets/proot_loader
+          cp android/app/src/main/jniLibs/arm64-v8a/*.so assets/ 2>/dev/null || true
+          chmod +x assets/*.so 2>/dev/null || true
 
       - name: Build APK
         run: |
