@@ -119,7 +119,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _nativeDir = nativeDir;
         _appendLog('📁 Native dir: $_nativeDir');
 
-        // Tạo /data/local/tmp và cấp quyền 777
+        // Tạo /data/local/tmp
         try {
           final tmpDir = Directory('/data/local/tmp');
           if (!await tmpDir.exists()) {
@@ -320,7 +320,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         }
         await Process.run('chmod', ['777', '/data/local/tmp']);
       } catch (e) {
-        _appendLog('⚠️ Cannot setup /data/local/tmp');
+        _appendLog('⚠️ Cannot setup /data/local/tmp: $e');
       }
 
       String cmd;
@@ -329,18 +329,20 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       if (hasProot && hasLoader) {
         final String nativeDir = _nativeDir;
-        // Đổi: cd vào native dir và chạy ./libcloudflared.so thay vì đường dẫn tuyệt đối
+        // Dùng proot trực tiếp, không qua shell, set working directory = nativeDir
         cmd = '$_prootPath '
             '-b ${resolvFile.path}:/etc/resolv.conf '
             '-b $nativeDir:$nativeDir '
             '-b /system:/system '
             '-b /vendor:/vendor '
-            '-b /system/bin:/system/bin '
-            '-b /system/lib64:/system/lib64 '
-            '/bin/sh -c "cd $nativeDir && ./libcloudflared.so ${args.join(' ')}"';
-        _appendLog('🛡️ Using proot with cd into native dir');
+            '-b /proc:/proc '
+            '-b /dev:/dev '
+            '-b /data/local/tmp:/tmp '
+            '-w $nativeDir '
+            '/libcloudflared.so ${args.join(' ')}';
+        _appendLog('🛡️ Using proot with bind mounts (no shell)');
       } else if (hasProot) {
-        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf /bin/sh -c "cd $_nativeDir && ./libcloudflared.so ${args.join(' ')}"';
+        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -w $_nativeDir ./libcloudflared.so ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader');
       } else {
         cmd = '$_cloudflaredPath ${args.join(' ')}';
@@ -355,12 +357,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
         'ANDROID_ROOT': '/system',
         'LD_LIBRARY_PATH': ldLibraryPath,
-        'PROOT_TMP_DIR': '/data/local/tmp',
+        'PROOT_TMP_DIR': '/tmp',
         'PROOT_NO_SECCOMP': '1',
         if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
       };
 
-      _appendLog('📁 PROOT_TMP_DIR: /data/local/tmp');
+      _appendLog('📁 PROOT_TMP_DIR: /tmp (mapped to /data/local/tmp)');
       _appendLog('📁 LD_LIBRARY_PATH: $ldLibraryPath');
 
       _process = await Process.start(
