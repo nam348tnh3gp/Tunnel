@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_ce/device_info_ce.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData; // 👈 Copy log
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 const MethodChannel _nativeChannel = MethodChannel('com.yourcompany.tunnel_controller/native');
 
@@ -39,14 +39,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _cloudflaredPath = '';
   String _prootPath = '';
   String _prootLoaderPath = '';
+  String _nativeDir = ''; // 👈 Lưu đường dẫn native libs
   bool _binaryReady = false;
 
-  // Hệ thống thông tin
   String _cpuInfo = '';
   String _tempInfo = '';
   Timer? _systemTimer;
 
-  // Scroll controller cho log
   final ScrollController _logScrollController = ScrollController();
 
   @override
@@ -65,13 +64,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.dispose();
   }
 
-  // -------------------- Quyền --------------------
   Future<void> _requestPermissions() async {
     await Permission.storage.request();
     _appendLog('✅ Permissions requested');
   }
 
-  // -------------------- Binary setup --------------------
   Future<void> _initBinary() async {
     try {
       String? nativeDir;
@@ -82,6 +79,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
 
       if (nativeDir != null && nativeDir.isNotEmpty) {
+        _nativeDir = nativeDir; // 👈 Lưu để dùng sau
+
         // Cloudflared
         final String cfPath = '$nativeDir/libcloudflared.so';
         if (File(cfPath).existsSync()) {
@@ -98,12 +97,21 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Proot (Termux) ready from native libs');
         }
 
-        // Proot loader (Termux source)
+        // Proot loader
         final String loaderPath = '$nativeDir/libproot_loader.so';
         if (File(loaderPath).existsSync()) {
           await Process.run('chmod', ['755', loaderPath]);
           _prootLoaderPath = loaderPath;
           _appendLog('✅ Proot loader ready from native libs');
+        }
+
+        // Kiểm tra libtalloc.so.2 (có thể không cần vì đã ở cùng thư mục)
+        final String tallocPath = '$nativeDir/libtalloc.so.2';
+        if (File(tallocPath).existsSync()) {
+          await Process.run('chmod', ['755', tallocPath]);
+          _appendLog('✅ libtalloc.so.2 ready from native libs');
+        } else {
+          _appendLog('⚠️ libtalloc.so.2 not found, may cause issues');
         }
 
         if (_cloudflaredPath.isNotEmpty) {
@@ -159,7 +167,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- System monitor (CHÚ Ý: có thể không hoạt động trên một số thiết bị) --------------------
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
@@ -174,8 +181,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         } catch (e) {
           if (mounted) {
             setState(() {
-              _cpuInfo = 'CPU: N/A (not supported)';  // 👈 Nhận xét
-              _tempInfo = '🌡️ Temp: N/A (not supported)'; // 👈 Nhận xét
+              _cpuInfo = 'CPU: N/A (not supported)';
+              _tempInfo = '🌡️ Temp: N/A (not supported)';
             });
           }
         }
@@ -183,12 +190,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
-  // -------------------- Log helper --------------------
   void _appendLog(String msg) {
     setState(() {
       _log += '\n$msg';
     });
-    // Tự động scroll xuống cuối
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_logScrollController.hasClients) {
         _logScrollController.animateTo(
@@ -200,7 +205,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
-  // -------------------- COPY LOG --------------------
   Future<void> _copyLog() async {
     if (_log.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -220,7 +224,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- Tunnel control --------------------
   void _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready');
@@ -258,7 +261,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       final bool hasLoader = _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync();
 
       if (hasProot && hasLoader) {
-        // Dùng proot + loader (Termux fork)
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
         _appendLog('🛡️ Using Termux proot with loader');
       } else if (hasProot) {
@@ -269,15 +271,21 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _appendLog('⚠️ Proot not available, running directly');
       }
 
-      // Môi trường (Termux-like)
+      // 👇 QUAN TRỌNG: Set LD_LIBRARY_PATH để tìm libtalloc.so.2
+      final String ldLibraryPath = _nativeDir.isNotEmpty
+          ? '$_nativeDir:/system/lib64:/vendor/lib64'
+          : '/system/lib64:/vendor/lib64';
+
       final Map<String, String> env = {
         'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
         'ANDROID_ROOT': '/system',
-        'LD_LIBRARY_PATH': '/system/lib64:/vendor/lib64:/data/data/com.termux/files/usr/lib',
-        'PROOT_TMP_DIR': '/data/local/tmp',       // Thư mục tạm thay cho /tmp
-        'PROOT_NO_SECCOMP': '1',                   // Tắt seccomp
-        if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath, // Chỉ định loader
+        'LD_LIBRARY_PATH': ldLibraryPath, // 👈 Đường dẫn đến libtalloc.so.2
+        'PROOT_TMP_DIR': '/data/local/tmp',
+        'PROOT_NO_SECCOMP': '1',
+        if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
       };
+
+      _appendLog('📁 LD_LIBRARY_PATH: $ldLibraryPath');
 
       _process = await Process.start(
         '/system/bin/sh',
@@ -329,7 +337,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- UI Build --------------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -337,7 +344,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         title: const Text('Cloudflare Tunnel'),
         centerTitle: true,
         actions: [
-          // 👇 Nút copy log
           IconButton(
             icon: const Icon(Icons.copy),
             tooltip: 'Copy Log',
@@ -432,7 +438,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               children: [
                 const Text('📋 Log:', style: TextStyle(fontWeight: FontWeight.bold)),
                 const Spacer(),
-                // Nút copy log nằm ở đây (thay thế)
                 TextButton.icon(
                   onPressed: _copyLog,
                   icon: const Icon(Icons.copy, size: 16),
