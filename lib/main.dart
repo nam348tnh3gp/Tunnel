@@ -29,8 +29,6 @@ class TunnelControlPage extends StatefulWidget {
 class _TunnelControlPageState extends State<TunnelControlPage> {
   final TextEditingController _tokenController = TextEditingController();
   final TextEditingController _portController = TextEditingController(text: '8080');
-  final TextEditingController _customCommandController = TextEditingController();
-
   bool _useTryMode = false;
   bool _isRunning = false;
   bool _permissionsGranted = false;
@@ -40,12 +38,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   StreamSubscription? _stderrSub;
   String _log = '';
   String _cloudflaredPath = '';
-  String _prootPath = '';
-  String _prootLoaderPath = '';
-  String _rootfsPath = '';
   String _nativeDir = '';
   bool _binaryReady = false;
-  bool _rootfsReady = false;
 
   String _cpuInfo = '';
   String _tempInfo = '';
@@ -58,7 +52,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.initState();
     _requestPermissions().then((_) {
       _initBinary();
-      _initRootfs();
       _startSystemMonitor();
     });
   }
@@ -68,11 +61,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _stopTunnel();
     _systemTimer?.cancel();
     _logScrollController.dispose();
-    _customCommandController.dispose();
     super.dispose();
   }
 
-  // ==================== PERMISSIONS ====================
   Future<void> _requestPermissions() async {
     _appendLog('🔑 Requesting all permissions...');
 
@@ -101,7 +92,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _appendLog('✅ All critical permissions granted');
   }
 
-  // ==================== INIT BINARY ====================
   Future<void> _initBinary() async {
     try {
       String? nativeDir;
@@ -120,78 +110,37 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           await Process.run('chmod', ['755', cfPath]);
           _cloudflaredPath = cfPath;
           _appendLog('✅ Cloudflared ready');
-        }
-
-        final String prPath = '$nativeDir/libproot.so';
-        if (File(prPath).existsSync()) {
-          await Process.run('chmod', ['755', prPath]);
-          _prootPath = prPath;
-          _appendLog('✅ Proot ready');
-        }
-
-        final String loaderPath = '$nativeDir/libproot_loader.so';
-        if (File(loaderPath).existsSync()) {
-          await Process.run('chmod', ['755', loaderPath]);
-          _prootLoaderPath = loaderPath;
-          _appendLog('✅ Proot loader ready');
-        }
-
-        final libs = ['libtalloc.so', 'libandroid-shmem.so'];
-        for (var lib in libs) {
-          final libPath = '$nativeDir/$lib';
-          if (File(libPath).existsSync()) {
-            await Process.run('chmod', ['755', libPath]);
-            _appendLog('✅ $lib ready');
-          }
-        }
-
-        if (_cloudflaredPath.isNotEmpty) {
           setState(() => _binaryReady = true);
+        } else {
+          _appendLog('❌ Cloudflared not found in native libs');
+          await _fallbackInitBinary();
         }
+      } else {
+        await _fallbackInitBinary();
       }
     } catch (e) {
       _appendLog('❌ Init binary error: $e');
+      await _fallbackInitBinary();
     }
   }
 
-  // ==================== INIT ROOTFS (Alpine) ====================
-  Future<void> _initRootfs() async {
+  Future<void> _fallbackInitBinary() async {
     try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final rootfsDir = Directory('${appDir.path}/alpine-rootfs');
-
-      if (!await rootfsDir.exists()) {
-        _appendLog('📦 Extracting Alpine rootfs...');
-        await rootfsDir.create(recursive: true);
-
-        final assetData = await rootBundle.load('assets/alpine-rootfs.tar.gz');
-        final tempFile = File('${appDir.path}/rootfs.tar.gz');
-        await tempFile.writeAsBytes(assetData.buffer.asUint8List());
-
-        final result = await Process.run('tar', [
-          '-xzf',
-          tempFile.path,
-          '-C',
-          rootfsDir.path,
-          '--no-same-owner',
-        ]);
-        if (result.exitCode != 0) {
-          _appendLog('❌ Extract failed: ${result.stderr}');
-          return;
-        }
-        await tempFile.delete();
-        _appendLog('✅ Alpine rootfs extracted to ${rootfsDir.path}');
+      final dir = await getApplicationDocumentsDirectory();
+      final String cfPath = '${dir.path}/cloudflared';
+      if (!File(cfPath).existsSync()) {
+        final data = await rootBundle.load('assets/cloudflared');
+        await File(cfPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
+        await Process.run('chmod', ['755', cfPath]);
       }
-
-      _rootfsPath = rootfsDir.path;
-      setState(() => _rootfsReady = true);
-      _appendLog('✅ Rootfs ready: $_rootfsPath');
+      _cloudflaredPath = cfPath;
+      setState(() => _binaryReady = true);
+      _appendLog('✅ Cloudflared ready (fallback)');
     } catch (e) {
-      _appendLog('❌ Rootfs init error: $e');
+      _appendLog('❌ Fallback failed: $e');
     }
   }
 
-  // ==================== SYSTEM MONITOR ====================
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
@@ -215,7 +164,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
-  // ==================== LOG HELPER ====================
   void _appendLog(String msg) {
     setState(() => _log += '\n$msg');
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -248,50 +196,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // ==================== BUILD PROOT COMMAND ====================
-  Future<String> _buildProotCommand(String command) async {
-    if (_prootPath.isEmpty || _rootfsPath.isEmpty) {
-      return '';
-    }
-
-    final cacheDir = await getTemporaryDirectory();
-    final tmpDir = cacheDir.path;
-    final tmpFolder = Directory('$tmpDir/tmp');
-    if (!await tmpFolder.exists()) {
-      await tmpFolder.create(recursive: true);
-    }
-    await Process.run('chmod', ['777', tmpFolder.path]);
-
-    final resolvFile = File('$tmpDir/resolv.conf');
-    await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
-
-    final hasLoader = _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync();
-
-    String cmd = '$_prootPath '
-        '-b ${resolvFile.path}:/etc/resolv.conf '
-        '-b $_rootfsPath:$_rootfsPath '
-        '-b $_nativeDir:$_nativeDir '
-        '-b /system:/system '
-        '-b /vendor:/vendor '
-        '-b /proc:/proc '
-        '-b /dev:/dev '
-        '-b ${tmpFolder.path}:/tmp '
-        '-w $_rootfsPath '
-        '/bin/sh -c "'
-        'export PATH=/usr/bin:/bin:/system/bin:/system/xbin:/vendor/bin; '
-        'export LD_LIBRARY_PATH=$_nativeDir:/system/lib64:/vendor/lib64; '
-        'export PROOT_TMP_DIR=/tmp; '
-        'export TMPDIR=/tmp; '
-        'cd $_nativeDir; '
-        '$command"';
-
-    return cmd;
-  }
-
-  // ==================== START TUNNEL ====================
   void _startTunnel() async {
-    if (!_binaryReady || !_rootfsReady) {
-      _appendLog('⏳ Binary or rootfs not ready');
+    if (!_binaryReady) {
+      _appendLog('⏳ Binary not ready');
       return;
     }
     if (_isRunning) {
@@ -300,10 +207,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     final port = int.tryParse(_portController.text.trim()) ?? 8080;
-    String args;
+    List<String> args;
 
     if (_useTryMode) {
-      args = 'tunnel --url http://localhost:$port';
+      args = ['tunnel', '--url', 'http://localhost:$port'];
       _appendLog('🚀 Starting Try Cloudflared on port $port');
     } else {
       final token = _tokenController.text.trim();
@@ -311,37 +218,21 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _appendLog('❌ Please enter Token');
         return;
       }
-      args = 'tunnel --token $token';
+      args = ['tunnel', '--token', token];
       _appendLog('🔑 Starting tunnel with token');
     }
 
     try {
-      final command = './libcloudflared.so $args';
-      final cmd = await _buildProotCommand(command);
-
-      if (cmd.isEmpty) {
-        _appendLog('❌ Cannot build proot command');
-        return;
-      }
-
+      // Chạy cloudflared trực tiếp (không cần proot)
       final Map<String, String> env = {
-        'PATH': '/usr/bin:/bin:/system/bin:/system/xbin:/vendor/bin',
+        'PATH': '/system/bin:/system/xbin:/vendor/bin',
         'ANDROID_ROOT': '/system',
         'LD_LIBRARY_PATH': '$_nativeDir:/system/lib64:/vendor/lib64',
-        'PROOT_TMP_DIR': '/tmp',
-        'PROOT_NO_SECCOMP': '1',
-        if (_prootLoaderPath.isNotEmpty) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
-        'TMPDIR': '/tmp',
-        'HOME': '/root',
-        'TERM': 'xterm-256color',
       };
 
-      _appendLog('🛡️ Using Alpine rootfs via proot');
-      _appendLog('📁 Rootfs: $_rootfsPath');
-
       _process = await Process.start(
-        '/system/bin/sh',
-        ['-c', cmd],
+        _cloudflaredPath,
+        args,
         runInShell: false,
         environment: env,
       );
@@ -389,59 +280,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // ==================== CUSTOM COMMAND ====================
-  Future<void> _executeCustomCommand() async {
-    String command = _customCommandController.text.trim();
-    if (command.isEmpty) {
-      _appendLog('⚠️ Please enter a command');
-      return;
-    }
-    if (!_binaryReady || !_rootfsReady) {
-      _appendLog('⏳ Binary or rootfs not ready');
-      return;
-    }
-
-    _appendLog('▶️ Executing: $command');
-
-    try {
-      final cmd = await _buildProotCommand(command);
-      if (cmd.isEmpty) {
-        _appendLog('❌ Cannot build command');
-        return;
-      }
-
-      final Map<String, String> env = {
-        'PATH': '/usr/bin:/bin:/system/bin:/system/xbin:/vendor/bin',
-        'ANDROID_ROOT': '/system',
-        'LD_LIBRARY_PATH': '$_nativeDir:/system/lib64:/vendor/lib64',
-        'PROOT_TMP_DIR': '/tmp',
-        'PROOT_NO_SECCOMP': '1',
-        if (_prootLoaderPath.isNotEmpty) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
-        'TMPDIR': '/tmp',
-        'HOME': '/root',
-        'TERM': 'xterm-256color',
-      };
-
-      final result = await Process.run(
-        '/system/bin/sh',
-        ['-c', cmd],
-        runInShell: false,
-        environment: env,
-      );
-
-      if (result.stdout.toString().isNotEmpty) {
-        _appendLog('[OUT] ${result.stdout}');
-      }
-      if (result.stderr.toString().isNotEmpty) {
-        _appendLog('[ERR] ${result.stderr}');
-      }
-      _appendLog('✅ Command finished with exit code: ${result.exitCode}');
-    } catch (e) {
-      _appendLog('❌ Error executing command: $e');
-    }
-  }
-
-  // ==================== UI ====================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -461,7 +299,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Mode
             DropdownButtonFormField<bool>(
               value: _useTryMode,
               items: const [
@@ -476,7 +313,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 12),
 
-            // Token
             if (!_useTryMode)
               TextField(
                 controller: _tokenController,
@@ -487,7 +323,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
             const SizedBox(height: 12),
 
-            // Port + Start/Stop
             Row(
               children: [
                 Expanded(
@@ -522,7 +357,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 12),
 
-            // CPU & Temp
             Row(
               children: [
                 Icon(Icons.memory, size: 18),
@@ -536,53 +370,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 12),
 
-            // Custom Command
-            Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey.withOpacity(0.3)),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '💻 Custom Command (Alpine shell)',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _customCommandController,
-                          decoration: const InputDecoration(
-                            hintText: 'e.g. ls -la, apk add curl',
-                            border: OutlineInputBorder(),
-                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                          ),
-                          style: const TextStyle(fontSize: 13),
-                          onSubmitted: (_) => _executeCustomCommand(),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: _executeCustomCommand,
-                        icon: const Icon(Icons.play_arrow, size: 16),
-                        label: const Text('Run'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blueGrey,
-                          minimumSize: const Size(60, 40),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // Log
             Row(
               children: [
                 const Text('📋 Log:', style: TextStyle(fontWeight: FontWeight.bold)),
