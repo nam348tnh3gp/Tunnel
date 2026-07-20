@@ -82,6 +82,17 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _nativeDir = nativeDir;
         _appendLog('📁 Native dir: $_nativeDir');
 
+        // Tạo thư mục /data/local/tmp nếu chưa có (cho PROOT_TMP_DIR)
+        try {
+          final tmpDir = Directory('/data/local/tmp');
+          if (!await tmpDir.exists()) {
+            await tmpDir.create(recursive: true);
+            _appendLog('✅ Created /data/local/tmp');
+          }
+        } catch (e) {
+          _appendLog('⚠️ Cannot create /data/local/tmp, fallback to temp dir');
+        }
+
         // Cloudflared
         final String cfPath = '$nativeDir/libcloudflared.so';
         if (File(cfPath).existsSync()) {
@@ -90,7 +101,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Cloudflared ready from native libs');
         }
 
-        // Proot (đã sửa phụ thuộc)
+        // Proot
         final String prPath = '$nativeDir/libproot.so';
         if (File(prPath).existsSync()) {
           await Process.run('chmod', ['755', prPath]);
@@ -248,13 +259,28 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       final resolvFile = File('${tempDir.path}/resolv.conf');
       await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
 
+      // Tạo thư mục /data/local/tmp cho PROOT_TMP_DIR
+      await Directory('/data/local/tmp').create(recursive: true);
+
       String cmd;
       final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
       final bool hasLoader = _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync();
 
       if (hasProot && hasLoader) {
-        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
-        _appendLog('🛡️ Using proot with all dependencies');
+        // Sử dụng proot với bind mounts đầy đủ
+        // - Bind mount thư mục native libs vào đúng vị trí của nó bên trong proot
+        // - Bind mount /system, /vendor
+        // - Bind mount resolv.conf giả vào /etc/resolv.conf
+        final String nativeDir = _nativeDir;
+        final String cfDir = _cloudflaredPath;
+
+        cmd = '$_prootPath '
+            '-b ${resolvFile.path}:/etc/resolv.conf '
+            '-b $nativeDir:$nativeDir '
+            '-b /system:/system '
+            '-b /vendor:/vendor '
+            '$cfDir ${args.join(' ')}';
+        _appendLog('🛡️ Using proot with bind mounts');
       } else if (hasProot) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader (may fail)');
