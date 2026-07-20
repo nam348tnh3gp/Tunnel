@@ -25,59 +25,52 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # CÀI ĐẶT PATCHELF
+      # BUILD PROOT STATIC BINARY (KHÔNG PHỤ THUỘC THƯ VIỆN NGOÀI)
       # ============================================================
-      - name: Install patchelf
+      
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y patchelf
+          sudo apt-get install -y \
+            build-essential \
+            libarchive-dev \
+            libtalloc-dev \
+            uthash-dev \
+            git \
+            make \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
 
-      # ============================================================
-      # TẢI PROOT, LOADER, LIBTALLOC
-      # ============================================================
-      - name: Download proot, loader and libtalloc from Termux
+      - name: Checkout Termux proot source
+        uses: actions/checkout@v4
+        with:
+          repository: termux/proot
+          path: proot-source
+          ref: master
+
+      - name: Build proot static for Android ARM64
         run: |
-          # Tải proot
-          wget -O proot.deb \
-            https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.85_aarch64.deb
+          cd proot-source/src
           
-          # Tải libtalloc
-          wget -O libtalloc.deb \
-            https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
+          # Thiết lập cross-compile
+          export CC=aarch64-linux-gnu-gcc
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export ARCH=aarch64
           
-          # Giải nén proot.deb
-          ar x proot.deb
-          tar -xvf data.tar.xz
+          # Build với flag static
+          make build.h
+          make loader.elf
+          make LDFLAGS="-static" proot
           
-          # Giải nén libtalloc.deb
-          ar x libtalloc.deb
-          tar -xvf data.tar.xz
+          # Kiểm tra file static
+          file proot
+          ls -la proot
           
-          mkdir -p output
-          cp data/data/com.termux/files/usr/bin/proot output/
-          cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
-          # 👇 Copy libtalloc.so.2 (giữ nguyên tên, sẽ đổi sau trong code)
-          cp data/data/com.termux/files/usr/lib/libtalloc.so.2 output/
+          # Copy ra output
+          mkdir -p ../output
+          cp proot ../output/
+          cp loader.elf ../output/
 
-      # ============================================================
-      # SỬA SONAME CỦA libproot.so (patchelf)
-      # ============================================================
-      - name: Fix SONAME of libproot.so
-        run: |
-          # Đổi tên libtalloc.so.2 -> libtalloc.so (cho đúng tên Android)
-          cp output/libtalloc.so.2 output/libtalloc.so
-          
-          # Dùng patchelf để thay đổi NEEDED từ libtalloc.so.2 -> libtalloc.so
-          patchelf --replace-needed libtalloc.so.2 libtalloc.so output/proot
-          
-          # Kiểm tra thay đổi
-          patchelf --print-needed output/proot
-          echo "=== Fixed proot ==="
-          ls -la output/
-
-      # ============================================================
-      # TẠO FLUTTER PROJECT & ĐÓNG GÓI
-      # ============================================================
       - name: Create Flutter project
         run: |
           flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
@@ -88,22 +81,20 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      - name: Package binaries into APK
+      - name: Package proot static into APK
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Proot binary (đã sửa SONAME)
-          cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          # Proot static binary (đã bao gồm tất cả thư viện)
+          cp ../proot-source/output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           
           # Proot loader
-          cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          cp ../proot-source/output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           
-          # libtalloc.so (tên chuẩn, không có .2)
-          cp ../output/libtalloc.so android/app/src/main/jniLibs/arm64-v8a/
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libtalloc.so
+          # KHÔNG CẦN libtalloc.so hay libandroid-shmem.so nữa!
 
       - name: Download cloudflared binary
         run: |
@@ -112,9 +103,6 @@ jobs:
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-      # ============================================================
-      # CẤU HÌNH ANDROID
-      # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
@@ -184,11 +172,9 @@ jobs:
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
           cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
-          cp android/app/src/main/jniLibs/arm64-v8a/libtalloc.so assets/libtalloc.so
           chmod +x assets/cloudflared
           chmod +x assets/proot
           chmod +x assets/proot_loader
-          chmod +x assets/libtalloc.so
 
       - name: Build APK
         run: |
