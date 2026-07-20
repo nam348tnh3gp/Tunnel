@@ -34,16 +34,21 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      # ------------------ TẢI PROOT (link chuẩn) ------------------
-      - name: Download proot binary for ARM64
+      # ------------------ TẢI PROOT + LOADER (link chuẩn) ------------------
+      - name: Download proot and loader
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Link chuẩn từ skirsten.github.io
+          # Tải proot binary
           wget -O android/app/src/main/jniLibs/arm64-v8a/libproot.so \
             https://skirsten.github.io/proot-portable-android-binaries/aarch64/proot
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          
+          # Tải loader (cần thiết để proot hoạt động)
+          wget -O android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so \
+            https://skirsten.github.io/proot-portable-android-binaries/aarch64/loader
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
 
       - name: Download cloudflared binary
         run: |
@@ -123,8 +128,10 @@ jobs:
           # Copy vào assets fallback
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
+          cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
           chmod +x assets/cloudflared
           chmod +x assets/proot
+          chmod +x assets/proot_loader
 
       - name: Build APK
         run: |
