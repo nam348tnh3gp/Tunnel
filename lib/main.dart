@@ -119,18 +119,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _nativeDir = nativeDir;
         _appendLog('📁 Native dir: $_nativeDir');
 
-        // Tạo /data/local/tmp và cấp quyền 777
-        try {
-          final tmpDir = Directory('/data/local/tmp');
-          if (!await tmpDir.exists()) {
-            await tmpDir.create(recursive: true);
-          }
-          await Process.run('chmod', ['777', '/data/local/tmp']);
-          _appendLog('✅ /data/local/tmp ready (chmod 777)');
-        } catch (e) {
-          _appendLog('⚠️ Cannot create /data/local/tmp: $e');
-        }
-
         // Cloudflared
         final String cfPath = '$nativeDir/libcloudflared.so';
         if (File(cfPath).existsSync()) {
@@ -307,21 +295,19 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      // Tạo resolv.conf giả
-      final tempDir = await getTemporaryDirectory();
-      final resolvFile = File('${tempDir.path}/resolv.conf');
+      // 👇 Lấy thư mục cache của ứng dụng (thay thế /tmp)
+      final cacheDir = await getTemporaryDirectory();
+      final tmpDir = cacheDir.path; // /data/user/0/com.yourcompany.tunnel_controller/cache
+
+      // Tạo resolv.conf giả trong cache dir
+      final resolvFile = File('$tmpDir/resolv.conf');
       await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
 
-      // Đảm bảo /data/local/tmp tồn tại
-      try {
-        final tmpDir = Directory('/data/local/tmp');
-        if (!await tmpDir.exists()) {
-          await tmpDir.create(recursive: true);
-        }
-        await Process.run('chmod', ['777', '/data/local/tmp']);
-      } catch (e) {
-        _appendLog('⚠️ Cannot setup /data/local/tmp: $e');
-      }
+      // Đảm bảo thư mục cache tồn tại và có quyền ghi
+      await Directory(tmpDir).create(recursive: true);
+      await Process.run('chmod', ['777', tmpDir]);
+
+      _appendLog('📁 Cache dir (as /tmp): $tmpDir');
 
       String cmd;
       final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
@@ -329,8 +315,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       if (hasProot && hasLoader) {
         final String nativeDir = _nativeDir;
-        // 👇 GIẢI PHÁP CHÍNH: bind mount /data/local/tmp vào /tmp
-        // và thêm -w . để set working directory là thư mục hiện tại
+
+        // 👇 GIẢI PHÁP CHÍNH: Bind mount cache dir vào /tmp (giống Termux)
         cmd = '$_prootPath '
             '-b ${resolvFile.path}:/etc/resolv.conf '
             '-b $nativeDir:$nativeDir '
@@ -338,12 +324,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             '-b /vendor:/vendor '
             '-b /proc:/proc '
             '-b /dev:/dev '
-            '-b /data/local/tmp:/tmp '  // 👈 QUAN TRỌNG: mount /tmp
-            '-w . '                     // 👈 set working dir là thư mục hiện tại
+            '-b $tmpDir:/tmp '           // 👈 Bind mount cache vào /tmp
+            '-w $nativeDir '             // 👈 Working directory = thư mục native
             './libcloudflared.so ${args.join(' ')}';
-        _appendLog('🛡️ Using proot with /tmp bind mount');
+        _appendLog('🛡️ Using proot with /tmp bind mount (Termux-style)');
       } else if (hasProot) {
-        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -b /data/local/tmp:/tmp -w . ./libcloudflared.so ${args.join(' ')}';
+        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -b $tmpDir:/tmp -w $_nativeDir ./libcloudflared.so ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader');
       } else {
         cmd = '$_cloudflaredPath ${args.join(' ')}';
@@ -355,15 +341,20 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           : '/system/lib64:/vendor/lib64';
 
       final Map<String, String> env = {
-        'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
+        'PATH': '/system/bin:/system/xbin:/vendor/bin',
         'ANDROID_ROOT': '/system',
         'LD_LIBRARY_PATH': ldLibraryPath,
-        'PROOT_TMP_DIR': '/tmp',  // 👈 Trỏ đến /tmp đã được bind mount
+        'PROOT_TMP_DIR': '/tmp',         // 👈 Trỏ đến /tmp đã được bind mount
         'PROOT_NO_SECCOMP': '1',
         if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
+        // 👇 Quan trọng: Termux dùng TMPDIR cho các chương trình con
+        'TMPDIR': '/tmp',
+        // Các biến môi trường proot thường dùng
+        'PROOT_FORCE_GLIBC': '1',
+        'PROOT_IGNORE_MISSING_LOADER': '1',
       };
 
-      _appendLog('📁 PROOT_TMP_DIR: /tmp (mapped to /data/local/tmp)');
+      _appendLog('📁 PROOT_TMP_DIR: /tmp (mapped to $tmpDir)');
       _appendLog('📁 LD_LIBRARY_PATH: $ldLibraryPath');
 
       _process = await Process.start(
