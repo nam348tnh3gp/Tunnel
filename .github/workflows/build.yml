@@ -25,44 +25,51 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # BUILD CLOUDFLARED CHO ANDROID (CROSS-COMPILE)
+      # CÀI ĐẶT QEMU CHO ARM64
       # ============================================================
-      
-      - name: Install Go and dependencies
+      - name: Setup QEMU for ARM64
         run: |
           sudo apt-get update
-          sudo apt-get install -y golang-go git make
+          sudo apt-get install -y qemu-user-static binfmt-support
+          # Đăng ký binfmt cho ARM64
+          sudo update-binfmts --enable qemu-arm
 
+      # ============================================================
+      # CÀI ĐẶT ANDROID NDK (Cần cho CGO_ENABLED=1)
+      # ============================================================
+      - name: Setup Android NDK
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
+          unzip -q android-ndk-r26c-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
+          echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      # ============================================================
+      # BUILD CLOUDFLARED CHO ANDROID VỚI CGO_ENABLED=1
+      # ============================================================
       - name: Build cloudflared for Android (ARM64)
         run: |
-          # Cài Go nếu chưa có
-          if ! command -v go &> /dev/null; then
-            wget https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
-            sudo tar -C /usr/local -xzf go1.21.5.linux-amd64.tar.gz
-            export PATH=$PATH:/usr/local/go/bin
-          fi
-          export PATH=$PATH:/usr/local/go/bin
-          
           # Clone cloudflared
           git clone https://github.com/cloudflare/cloudflared.git --depth=1
           cd cloudflared
           
-          # Build cho Android ARM64 với dynamic linking (sẽ dùng DNS của Android)
-          # Lưu ý: Cần cross-compile với Android NDK toolchain
-          # Dùng GOOS=android và GOARCH=arm64 với CGO_ENABLED=1
-          # Nhưng trên AMD64 không có linker cho Android, nên dùng CGO_ENABLED=0
-          # và thêm flag để sử dụng DNS của Android
-          CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build \
-            -ldflags="-s -w -X main.Version=$(git describe --tags --always)" \
-            -o cloudflared-arm64 ./cmd/cloudflared
+          # Thiết lập cross-compile cho Android ARM64
+          export GOOS=android
+          export GOARCH=arm64
+          export CGO_ENABLED=1
+          export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang"
+          export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++"
+          
+          # Build binary
+          go build -ldflags="-s -w" -o cloudflared ./cmd/cloudflared
           
           # Kiểm tra
-          file cloudflared-arm64
-          ls -la cloudflared-arm64
+          file cloudflared
+          readelf -d cloudflared | grep NEEDED || echo "No dynamic dependencies"
           
           # Copy ra output
           mkdir -p ../output
-          cp cloudflared-arm64 ../output/cloudflared
+          cp cloudflared ../output/
 
       # ============================================================
       # TẠO FLUTTER PROJECT
@@ -78,18 +85,18 @@ jobs:
           flutter pub get
 
       # ============================================================
-      # COPY CLOUDFLARED VÀO JNILIBS (CHO TẤT CẢ KIẾN TRÚC)
+      # COPY CLOUDFLARED VÀO JNILIBS
       # ============================================================
-      - name: Setup native libraries for all architectures
+      - name: Setup native libraries
         run: |
           cd tunnel_app
           
-          # ARM64-v8a (build từ source)
+          # ARM64-v8a (build từ source với dynamic linking)
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           cp ../output/cloudflared android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
           
-          # armabi-v7a (ARM32) - dùng binary từ Cloudflare
+          # armabi-v7a (ARM32) - dùng prebuilt
           mkdir -p android/app/src/main/jniLibs/armeabi-v7a
           wget -O android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm
@@ -107,12 +114,9 @@ jobs:
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-386
           chmod +x android/app/src/main/jniLibs/x86/libcloudflared.so
           
-          # Copy vào assets để fallback (ARM64)
+          # Copy vào assets (ARM64)
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           chmod +x assets/cloudflared
-          
-          echo "=== Native libraries ==="
-          find android/app/src/main/jniLibs -name "*.so" -exec file {} \;
 
       # ============================================================
       # CẤU HÌNH ANDROID
@@ -121,10 +125,8 @@ jobs:
         run: |
           cd tunnel_app
           
-          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # MainActivity.kt
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -150,7 +152,6 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -160,7 +161,6 @@ jobs:
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
