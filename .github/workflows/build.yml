@@ -24,33 +24,54 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      # ------------------ BUILD PROOT + LOADER TỪ SOURCE ------------------
+      # ============================================================
+      # 1. BUILD PROOT + LOADER TỪ SOURCE TERMUX (Cách cộng đồng làm)
+      # ============================================================
+      
+      # 1.1 Cài đặt dependencies và toolchain
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-dev libtalloc-dev uthash-dev gcc-aarch64-linux-gnu
+          sudo apt-get install -y \
+            build-essential \
+            libarchive-dev \
+            libtalloc-dev \
+            uthash-dev \
+            git \
+            make \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
 
+      # 1.2 Clone source proot từ Termux (fork đã được vá cho Android)
       - name: Checkout Termux proot source
         uses: actions/checkout@v4
         with:
           repository: termux/proot
           path: proot-source
+          # Dùng commit ổn định nhất (có thể thay đổi theo thời gian)
+          ref: master
 
-      - name: Build proot and loader for ARM64
+      # 1.3 Build proot và loader cho ARM64 (aarch64)
+      #    Cách này giống như Termux build package của họ
+      - name: Build proot and loader for Android ARM64
         run: |
           cd proot-source/src
           
-          # Build loader cho ARM64 (aarch64)
-          # Sử dụng cross-compiler để build cho Android ARM64
+          # Thiết lập cross-compile cho Android ARM64
           export CC=aarch64-linux-gnu-gcc
           export CROSS_COMPILE=aarch64-linux-gnu-
+          export ARCH=aarch64
           
-          # Build loader và proot
+          # Build loader và proot (giống Makefile của Termux)
           make -f GNUmakefile loader.elf loader-m32.elf build.h
-          make -f GNUmakefile proot care
+          make -f GNUmakefile proot
           
           # Kiểm tra file đã tạo
-          ls -la loader.elf proot
+          ls -la proot loader.elf
+
+      # ============================================================
+      # 2. TẠO FLUTTER PROJECT & ĐÓNG GÓI BINARY
+      # ============================================================
 
       - name: Create Flutter project
         run: |
@@ -62,29 +83,40 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      - name: Setup native libraries
+      # 2.1 Đặt proot và loader vào jniLibs (Android sẽ tự giải nén)
+      - name: Package proot and loader into APK
         run: |
           cd tunnel_app
-          
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Cloudflared
+          # Proot binary (đã build từ source Termux)
+          cp ../proot-source/src/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          
+          # Proot loader (quan trọng! cần cho proot chạy)
+          cp ../proot-source/src/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+
+      # 2.2 Tải cloudflared
+      - name: Download cloudflared binary
+        run: |
+          cd tunnel_app
           wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-          # Proot binary (build từ source Termux)
-          cp ../proot-source/src/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
+      # ============================================================
+      # 3. CẤU HÌNH ANDROID (Manifest, MainActivity, packaging)
+      # ============================================================
 
-          # Proot loader (build từ source Termux) 👈 QUAN TRỌNG
-          cp ../proot-source/src/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
-
-          # packagingOptions
+      - name: Configure Android native libraries
+        run: |
+          cd tunnel_app
+          
+          # packagingOptions - bắt buộc để Android giải nén .so
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # MainActivity.kt
+          # MainActivity.kt - cung cấp MethodChannel để lấy native lib dir
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -110,7 +142,7 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
+          # AndroidManifest.xml - quyền INTERNET
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -145,9 +177,17 @@ jobs:
           </manifest>
           EOF
 
-          # Copy vào assets fallback
-          cp android/app/src/main/jniLibs/arm64-v8a/*.so assets/ 2>/dev/null || true
-          chmod +x assets/*.so 2>/dev/null || true
+          # Copy vào assets để fallback (dự phòng)
+          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
+          cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
+          cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
+          chmod +x assets/cloudflared
+          chmod +x assets/proot
+          chmod +x assets/proot_loader
+
+      # ============================================================
+      # 4. BUILD APK
+      # ============================================================
 
       - name: Build APK
         run: |
