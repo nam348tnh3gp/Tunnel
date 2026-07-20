@@ -46,7 +46,7 @@ jobs:
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
 
       # ============================================================
-      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC (chỉ để tham khảo)
+      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC
       # ============================================================
       - name: Find dependencies
         run: |
@@ -54,17 +54,17 @@ jobs:
           readelf -d output/proot | grep NEEDED
 
       # ============================================================
-      # TẢI CÁC GÓI THƯ VIỆN (link chính thức từ packages.termux.dev)
+      # TẢI CÁC GÓI THƯ VIỆN
       # ============================================================
       - name: Download dependency packages
         run: |
           mkdir -p libs_output
           
-          # Tải libtalloc (phiên bản 2.4.3)
+          # Tải libtalloc
           wget -O libtalloc.deb \
             https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
           
-          # Tải libandroid-shmem (phiên bản 0.7 - đã xác nhận tồn tại)
+          # Tải libandroid-shmem
           wget -O libandroid-shmem.deb \
             https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb
           
@@ -81,7 +81,7 @@ jobs:
           ls -la libs_output/
 
       # ============================================================
-      # SỬA TÊN FILE .so (bỏ số phiên bản) VÀ SỬA NEEDED CỦA PROOT
+      # SỬA TÊN FILE .so VÀ SỬA NEEDED CỦA PROOT
       # ============================================================
       - name: Fix library names and proot dependencies
         run: |
@@ -98,17 +98,15 @@ jobs:
           
           # Sửa NEEDED của proot
           cd output
-          # Thay libtalloc.so.2 -> libtalloc.so
           if readelf -d proot | grep -q "libtalloc.so.2"; then
             patchelf --replace-needed libtalloc.so.2 libtalloc.so proot
           fi
-          # libandroid-shmem.so đã đúng tên, không cần sửa
           echo "=== Fixed proot dependencies ==="
           readelf -d proot | grep NEEDED
           ls -la
 
       # ============================================================
-      # TẠO FLUTTER PROJECT & ĐÓNG GÓI
+      # TẠO FLUTTER PROJECT
       # ============================================================
       - name: Create Flutter project
         run: |
@@ -120,28 +118,52 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      - name: Package binaries into APK
+      # ============================================================
+      # ĐÓNG GÓI BINARY VÀO JNILIBS VÀ ASSETS
+      # ============================================================
+      - name: Package binaries into APK and assets
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p assets
           
-          # Proot và loader
+          # Copy proot và loader vào jniLibs
           cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           
-          # Tất cả thư viện phụ thuộc
+          # Copy thư viện phụ thuộc vào jniLibs
           cp ../output/*.so android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
           chmod +x android/app/src/main/jniLibs/arm64-v8a/*.so 2>/dev/null || true
+          
+          # 👇 Copy vào assets (để fallback, tránh lỗi pubspec)
+          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared 2>/dev/null || true
+          cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot 2>/dev/null || true
+          cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader 2>/dev/null || true
+          cp android/app/src/main/jniLibs/arm64-v8a/libtalloc.so assets/libtalloc.so 2>/dev/null || true
+          cp android/app/src/main/jniLibs/arm64-v8a/libandroid-shmem.so assets/libandroid-shmem.so 2>/dev/null || true
+          chmod +x assets/* 2>/dev/null || true
+          
+          echo "=== Assets after copy ==="
+          ls -la assets/
 
+      # ============================================================
+      # TẢI CLOUDFLARED
+      # ============================================================
       - name: Download cloudflared binary
         run: |
           cd tunnel_app
           wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+          # Cũng copy vào assets
+          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
+          chmod +x assets/cloudflared
 
+      # ============================================================
+      # CẤU HÌNH ANDROID (MainActivity, Manifest)
+      # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
@@ -206,10 +228,6 @@ jobs:
               </application>
           </manifest>
           EOF
-
-          # Fallback assets
-          cp android/app/src/main/jniLibs/arm64-v8a/* assets/ 2>/dev/null || true
-          chmod +x assets/* 2>/dev/null || true
 
       - name: Build APK
         run: |
