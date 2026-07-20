@@ -31,6 +31,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   final TextEditingController _portController = TextEditingController(text: '8080');
   bool _useTryMode = false;
   bool _isRunning = false;
+  bool _permissionsGranted = false;
 
   Process? _process;
   StreamSubscription? _stdoutSub;
@@ -51,9 +52,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   @override
   void initState() {
     super.initState();
-    _requestPermissions();
-    _initBinary();
-    _startSystemMonitor();
+    _requestPermissions().then((_) {
+      _initBinary();
+      _startSystemMonitor();
+    });
   }
 
   @override
@@ -64,12 +66,53 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.dispose();
   }
 
+  // -------------------- Xin toàn bộ quyền chủ động --------------------
   Future<void> _requestPermissions() async {
-    await Permission.storage.request();
-    _appendLog('✅ Permissions requested');
+    _appendLog('🔑 Requesting all permissions...');
+
+    // Danh sách quyền cần xin
+    List<Permission> permissions = [
+      Permission.storage,
+      Permission.phone,
+      Permission.notification,
+      Permission.manageExternalStorage, // Android 11+
+    ];
+
+    // Yêu cầu từng quyền một và log kết quả
+    for (var perm in permissions) {
+      final status = await perm.request();
+      if (status.isGranted) {
+        _appendLog('✅ ${perm.toString().split('.').last} granted');
+      } else if (status.isDenied) {
+        _appendLog('⚠️ ${perm.toString().split('.').last} denied');
+      } else if (status.isPermanentlyDenied) {
+        _appendLog('❌ ${perm.toString().split('.').last} permanently denied');
+        // Mở setting nếu cần
+        if (await perm.shouldShowRequestRationale == false) {
+          await openAppSettings();
+        }
+      }
+    }
+
+    // Kiểm tra xem có đủ quyền không (ít nhất storage và manageExternalStorage)
+    final storageGranted = await Permission.storage.isGranted;
+    final manageGranted = await Permission.manageExternalStorage.isGranted;
+    if (storageGranted || manageGranted) {
+      _permissionsGranted = true;
+      _appendLog('✅ All critical permissions granted');
+    } else {
+      _appendLog('⚠️ Some permissions missing, may affect functionality');
+      _permissionsGranted = true; // Vẫn tiếp tục, nhưng có thể lỗi
+    }
   }
 
+  // -------------------- Binary setup --------------------
   Future<void> _initBinary() async {
+    if (!_permissionsGranted) {
+      _appendLog('⏳ Waiting for permissions...');
+      await Future.delayed(Duration(seconds: 2));
+    }
+
     try {
       String? nativeDir;
       try {
@@ -82,15 +125,28 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _nativeDir = nativeDir;
         _appendLog('📁 Native dir: $_nativeDir');
 
-        // Tạo thư mục /data/local/tmp nếu chưa có (cho PROOT_TMP_DIR)
+        // Tạo thư mục /data/local/tmp và cấp quyền 777
         try {
           final tmpDir = Directory('/data/local/tmp');
           if (!await tmpDir.exists()) {
             await tmpDir.create(recursive: true);
-            _appendLog('✅ Created /data/local/tmp');
           }
+          await Process.run('chmod', ['777', '/data/local/tmp']);
+          _appendLog('✅ /data/local/tmp ready (chmod 777)');
         } catch (e) {
-          _appendLog('⚠️ Cannot create /data/local/tmp, fallback to temp dir');
+          _appendLog('⚠️ Cannot create /data/local/tmp: $e');
+          // Fallback: dùng thư mục cache của app
+          try {
+            final cacheDir = await getTemporaryDirectory();
+            final altTmp = Directory('${cacheDir.path}/tmp');
+            if (!await altTmp.exists()) {
+              await altTmp.create(recursive: true);
+            }
+            await Process.run('chmod', ['777', altTmp.path]);
+            _appendLog('✅ Fallback tmp: ${altTmp.path}');
+          } catch (e2) {
+            _appendLog('⚠️ Cannot create fallback tmp: $e2');
+          }
         }
 
         // Cloudflared
@@ -99,6 +155,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           await Process.run('chmod', ['755', cfPath]);
           _cloudflaredPath = cfPath;
           _appendLog('✅ Cloudflared ready from native libs');
+        } else {
+          _appendLog('❌ Cloudflared not found in native libs');
         }
 
         // Proot
@@ -106,7 +164,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         if (File(prPath).existsSync()) {
           await Process.run('chmod', ['755', prPath]);
           _prootPath = prPath;
-          _appendLog('✅ Proot ready from native libs (deps fixed)');
+          _appendLog('✅ Proot ready from native libs');
+        } else {
+          _appendLog('❌ Proot not found in native libs');
         }
 
         // Proot loader
@@ -115,10 +175,21 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           await Process.run('chmod', ['755', loaderPath]);
           _prootLoaderPath = loaderPath;
           _appendLog('✅ Proot loader ready from native libs');
+        } else {
+          _appendLog('❌ Proot loader not found in native libs');
         }
 
-        // Tất cả thư viện phụ đã có trong native dir
-        _appendLog('✅ All dependency libraries are in native dir');
+        // Kiểm tra các thư viện phụ
+        final libs = ['libtalloc.so', 'libandroid-shmem.so'];
+        for (var lib in libs) {
+          final libPath = '$nativeDir/$lib';
+          if (File(libPath).existsSync()) {
+            await Process.run('chmod', ['755', libPath]);
+            _appendLog('✅ $lib ready');
+          } else {
+            _appendLog('⚠️ $lib not found');
+          }
+        }
 
         if (_cloudflaredPath.isNotEmpty) {
           setState(() => _binaryReady = true);
@@ -184,8 +255,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         } catch (e) {
           if (mounted) {
             setState(() {
-              _cpuInfo = 'CPU: N/A (not supported)';
-              _tempInfo = '🌡️ Temp: N/A (not supported)';
+              _cpuInfo = 'CPU: N/A';
+              _tempInfo = '🌡️ Temp: N/A';
             });
           }
         }
@@ -259,31 +330,43 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       final resolvFile = File('${tempDir.path}/resolv.conf');
       await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
 
-      // Tạo thư mục /data/local/tmp cho PROOT_TMP_DIR
-      await Directory('/data/local/tmp').create(recursive: true);
+      // Đảm bảo /data/local/tmp tồn tại và có quyền
+      try {
+        final tmpDir = Directory('/data/local/tmp');
+        if (!await tmpDir.exists()) {
+          await tmpDir.create(recursive: true);
+        }
+        await Process.run('chmod', ['777', '/data/local/tmp']);
+      } catch (e) {
+        _appendLog('⚠️ Cannot setup /data/local/tmp, using cache');
+      }
 
       String cmd;
       final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
       final bool hasLoader = _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync();
 
       if (hasProot && hasLoader) {
-        // Sử dụng proot với bind mounts đầy đủ
-        // - Bind mount thư mục native libs vào đúng vị trí của nó bên trong proot
-        // - Bind mount /system, /vendor
-        // - Bind mount resolv.conf giả vào /etc/resolv.conf
         final String nativeDir = _nativeDir;
         final String cfDir = _cloudflaredPath;
+
+        // Tìm đường dẫn tmp thực tế
+        String tmpDirPath = '/data/local/tmp';
+        try {
+          final dir = await getTemporaryDirectory();
+          tmpDirPath = dir.path;
+        } catch (e) {}
 
         cmd = '$_prootPath '
             '-b ${resolvFile.path}:/etc/resolv.conf '
             '-b $nativeDir:$nativeDir '
             '-b /system:/system '
             '-b /vendor:/vendor '
+            '-b $tmpDirPath:/tmp '
             '$cfDir ${args.join(' ')}';
-        _appendLog('🛡️ Using proot with bind mounts');
+        _appendLog('🛡️ Using proot with all bind mounts');
       } else if (hasProot) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
-        _appendLog('⚠️ Proot without loader (may fail)');
+        _appendLog('⚠️ Proot without loader');
       } else {
         cmd = '$_cloudflaredPath ${args.join(' ')}';
         _appendLog('⚠️ Proot not available, running directly');
@@ -293,15 +376,23 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           ? '$_nativeDir:/system/lib64:/vendor/lib64'
           : '/system/lib64:/vendor/lib64';
 
+      // Xác định tmp dir cho PROOT_TMP_DIR
+      String tmpDirEnv = '/data/local/tmp';
+      try {
+        final dir = await getTemporaryDirectory();
+        tmpDirEnv = dir.path;
+      } catch (e) {}
+
       final Map<String, String> env = {
         'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
         'ANDROID_ROOT': '/system',
         'LD_LIBRARY_PATH': ldLibraryPath,
-        'PROOT_TMP_DIR': '/data/local/tmp',
+        'PROOT_TMP_DIR': tmpDirEnv,
         'PROOT_NO_SECCOMP': '1',
         if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
       };
 
+      _appendLog('📁 PROOT_TMP_DIR: $tmpDirEnv');
       _appendLog('📁 LD_LIBRARY_PATH: $ldLibraryPath');
 
       _process = await Process.start(
