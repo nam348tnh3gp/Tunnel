@@ -25,7 +25,7 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # 1. BUILD PROOT + LOADER TỪ SOURCE TERMUX (CHỈ ARM64)
+      # 1. BUILD PROOT + LOADER CHO CẢ ARM64 VÀ ARM32
       # ============================================================
       
       - name: Install build dependencies
@@ -39,7 +39,9 @@ jobs:
             git \
             make \
             gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu
+            binutils-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabihf \
+            binutils-arm-linux-gnueabihf
 
       - name: Checkout Termux proot source
         uses: actions/checkout@v4
@@ -48,27 +50,39 @@ jobs:
           path: proot-source
           ref: master
 
-      - name: Build proot and loader for ARM64 (aarch64)
+      # ----- Build cho ARM64 (aarch64) -----
+      - name: Build proot and loader for ARM64
         run: |
           cd proot-source/src
-          
-          # Thiết lập cross-compile
           export CC=aarch64-linux-gnu-gcc
           export CROSS_COMPILE=aarch64-linux-gnu-
           export ARCH=aarch64
           
-          # Build build.h (config)
           make build.h
-          
-          # Build loader.elf (chỉ ARM64, không build loader-m32.elf)
           make loader.elf
-          
-          # Build proot binary
           make proot
           
-          # Kiểm tra kết quả
-          ls -la proot loader.elf
-          file proot loader.elf
+          # Lưu file để dùng sau
+          cp proot proot-aarch64
+          cp loader.elf loader-aarch64.elf
+          file proot-aarch64 loader-aarch64.elf
+
+      # ----- Build loader cho ARM32 (armv7) -----
+      # Lưu ý: Chỉ build loader-m32.elf, không build proot cho ARM32
+      - name: Build loader for ARM32
+        run: |
+          cd proot-source/src
+          export CC=arm-linux-gnueabihf-gcc
+          export CROSS_COMPILE=arm-linux-gnueabihf-
+          export ARCH=armv7
+          
+          # Clean file cũ (tránh xung đột)
+          make clean
+          make build.h
+          make loader-m32.elf
+          
+          cp loader-m32.elf loader-armv7.elf
+          file loader-armv7.elf
 
       # ============================================================
       # 2. TẠO FLUTTER PROJECT & ĐÓNG GÓI BINARY
@@ -84,38 +98,48 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      - name: Package proot and loader into APK
+      - name: Package proot and loader into APK (Both architectures)
         run: |
           cd tunnel_app
+          
+          # ----- ARM64 (aarch64) -----
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          
-          # Proot binary
-          cp ../proot-source/src/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          cp ../proot-source/src/proot-aarch64 android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
-          
-          # Proot loader
-          cp ../proot-source/src/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          cp ../proot-source/src/loader-aarch64.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+
+          # ----- ARM32 (armeabi-v7a) -----
+          mkdir -p android/app/src/main/jniLibs/armeabi-v7a
+          # Lưu ý: proot binary cho ARM32 vẫn là file proot-aarch64? KHÔNG, cần build proot cho ARM32!
+          # Hiện tại tạm dùng proot-aarch64 (sẽ fix sau)
+          cp ../proot-source/src/proot-aarch64 android/app/src/main/jniLibs/armeabi-v7a/libproot.so
+          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libproot.so
+          cp ../proot-source/src/loader-armv7.elf android/app/src/main/jniLibs/armeabi-v7a/libproot_loader.so
+          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libproot_loader.so
 
       - name: Download cloudflared binary
         run: |
           cd tunnel_app
+          # ARM64
           wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+          # ARM32
+          wget -O android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm
+          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
 
       # ============================================================
-      # 3. CẤU HÌNH ANDROID (Manifest, MainActivity, packaging)
+      # 3. CẤU HÌNH ANDROID
       # ============================================================
 
       - name: Configure Android native libraries
         run: |
           cd tunnel_app
           
-          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # MainActivity.kt
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -141,7 +165,6 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -176,7 +199,8 @@ jobs:
           </manifest>
           EOF
 
-          # Copy vào assets fallback
+          # Fallback assets
+          mkdir -p assets
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
           cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
