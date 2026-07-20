@@ -46,7 +46,7 @@ jobs:
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
 
       # ============================================================
-      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC (chỉ để tham khảo, không dùng)
+      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC (chỉ để tham khảo)
       # ============================================================
       - name: Find dependencies
         run: |
@@ -54,7 +54,7 @@ jobs:
           readelf -d output/proot | grep NEEDED
 
       # ============================================================
-      # TẢI CÁC GÓI THƯ VIỆN CỤ THỂ (dùng link chính xác)
+      # TẢI CÁC GÓI THƯ VIỆN (link chính thức từ packages.termux.dev)
       # ============================================================
       - name: Download dependency packages
         run: |
@@ -62,11 +62,11 @@ jobs:
           
           # Tải libtalloc (phiên bản 2.4.3)
           wget -O libtalloc.deb \
-            https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
+            https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
           
-          # Tải libandroid-shmem (phiên bản 0.4.1)
+          # Tải libandroid-shmem (phiên bản 0.4.0 - đã được xác nhận tồn tại)
           wget -O libandroid-shmem.deb \
-            https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.4.1_aarch64.deb
+            https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.4.0_aarch64.deb
           
           # Giải nén tất cả .deb
           for deb in *.deb; do
@@ -102,12 +102,7 @@ jobs:
           if readelf -d proot | grep -q "libtalloc.so.2"; then
             patchelf --replace-needed libtalloc.so.2 libtalloc.so proot
           fi
-          # Thay libandroid-shmem.so -> libandroid-shmem.so (không có số phiên bản)
-          if readelf -d proot | grep -q "libandroid-shmem.so"; then
-            # Nếu NEEDED là libandroid-shmem.so (không có số), giữ nguyên
-            echo "libandroid-shmem.so is already correct"
-          fi
-          # Kiểm tra lại
+          # libandroid-shmem.so đã đúng tên, không cần sửa
           echo "=== Fixed proot dependencies ==="
           readelf -d proot | grep NEEDED
           ls -la
