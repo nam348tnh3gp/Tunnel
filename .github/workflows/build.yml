@@ -25,137 +25,108 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # CÀI ĐẶT CÔNG CỤ
+      # BUILD CLOUDFLARED CHO ANDROID TRONG TERMUX DOCKER
       # ============================================================
-      - name: Install tools
+      
+      - name: Build cloudflared for Android in Termux Docker
         run: |
-          sudo apt-get update
-          sudo apt-get install -y patchelf binutils
-
-      # ============================================================
-      # TẢI PROOT VÀ GIẢI NÉN
-      # ============================================================
-      - name: Download proot deb
-        run: |
-          wget -O proot.deb \
-            https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.85_aarch64.deb
-          ar x proot.deb
-          tar -xvf data.tar.xz
+          # Tạo script build
+          cat > build-cloudflared.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          echo "📦 Building cloudflared for Android..."
+          
+          # Cập nhật và cài dependencies
+          pkg update -y
+          pkg install -y golang git make
+          
+          # Clone source
+          git clone https://github.com/cloudflare/cloudflared.git --depth=1
+          cd cloudflared
+          
+          # Build cho ARM64 với dynamic linking (dùng DNS của Android)
+          CGO_ENABLED=1 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o cloudflared ./cmd/cloudflared
+          
+          # Kiểm tra file
+          file cloudflared
+          ls -la cloudflared
+          
+          # Copy ra ngoài
+          cp cloudflared /output/
+          EOF
+          
+          chmod +x build-cloudflared.sh
+          
+          # Tạo thư mục output
           mkdir -p output
-          cp data/data/com.termux/files/usr/bin/proot output/
-          cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
+          
+          # Chạy Termux Docker
+          docker run --rm --privileged \
+            -v $(pwd):/workspace \
+            -v $(pwd)/output:/output \
+            -w /workspace \
+            termux/termux-docker:aarch64 \
+            /bin/bash -c "/workspace/build-cloudflared.sh"
 
       # ============================================================
-      # TẢI CÁC GÓI THƯ VIỆN PHỤ THUỘC
+      # TẠO FLUTTER PROJECT
       # ============================================================
-      - name: Download dependency packages
-        run: |
-          mkdir -p libs_output
-          wget -O libtalloc.deb \
-            https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
-          wget -O libandroid-shmem.deb \
-            https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb
-          for deb in *.deb; do
-            ar x $deb
-            tar -xvf data.tar.xz
-          done
-          find data -name "*.so*" -exec cp {} libs_output/ \;
-
-      # ============================================================
-      # SỬA TÊN FILE .so VÀ SỬA NEEDED CỦA PROOT
-      # ============================================================
-      - name: Fix library names and proot dependencies
-        run: |
-          for lib in libs_output/*.so*; do
-            if [[ $lib == *.so.* ]]; then
-              newname=$(echo $lib | sed 's/\.[0-9]*$//')
-              mv $lib $newname
-            fi
-          done
-          cp libs_output/*.so output/ 2>/dev/null || true
-          cd output
-          if readelf -d proot | grep -q "libtalloc.so.2"; then
-            patchelf --replace-needed libtalloc.so.2 libtalloc.so proot
-          fi
-
-      # ============================================================
-      # TẢI ALPINE ROOTFS VÀO THƯ MỤC TẠM
-      # ============================================================
-      - name: Download Alpine rootfs
-        run: |
-          mkdir -p alpine_rootfs
-          wget -O alpine_rootfs/alpine-rootfs.tar.gz \
-            https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz
-          echo "=== Alpine rootfs downloaded ==="
-          ls -la alpine_rootfs/
-
-      # ============================================================
-      # TẠO FLUTTER PROJECT VÀ COPY TẤT CẢ FILE VÀO ĐÚNG THƯ MỤC
-      # ============================================================
-      - name: Create Flutter project and copy assets
+      - name: Create Flutter project
         run: |
           flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
           cd tunnel_app
-          flutter pub get
-          
-          # Xóa thư mục assets và lib mặc định
           rm -rf lib pubspec.yaml assets
-          
-          # Copy code và pubspec từ repo gốc
           cp -r ../lib .
           cp ../pubspec.yaml .
-          
-          # Tạo thư mục assets
           mkdir -p assets
-          
-          # Copy tất cả binary vào assets
-          cp ../output/proot assets/proot
-          cp ../output/loader.elf assets/proot_loader
-          cp ../output/*.so assets/ 2>/dev/null || true
-          
-          # Copy cloudflared (sẽ tải sau)
-          
-          # Copy Alpine rootfs vào assets
-          cp ../alpine_rootfs/alpine-rootfs.tar.gz assets/
-          
-          echo "=== Assets after copy ==="
-          ls -la assets/
+          flutter pub get
 
       # ============================================================
-      # TẢI CLOUDFLARED VÀO JNILIBS VÀ ASSETS
+      # COPY CLOUDFLARED VÀO JNILIBS (CHO TẤT CẢ KIẾN TRÚC)
       # ============================================================
-      - name: Download cloudflared binary
+      - name: Setup native libraries for all architectures
         run: |
           cd tunnel_app
-          mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          # ARM64-v8a
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp ../output/cloudflared android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
           
-          # Copy cloudflared vào assets
+          # armabi-v7a (ARM32) - dùng binary ARM32 từ Cloudflare
+          mkdir -p android/app/src/main/jniLibs/armeabi-v7a
+          wget -O android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm
+          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
+          
+          # x86_64
+          mkdir -p android/app/src/main/jniLibs/x86_64
+          wget -O android/app/src/main/jniLibs/x86_64/libcloudflared.so \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x android/app/src/main/jniLibs/x86_64/libcloudflared.so
+          
+          # x86 (32-bit)
+          mkdir -p android/app/src/main/jniLibs/x86
+          wget -O android/app/src/main/jniLibs/x86/libcloudflared.so \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-386
+          chmod +x android/app/src/main/jniLibs/x86/libcloudflared.so
+          
+          # Copy vào assets để fallback (ARM64)
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           chmod +x assets/cloudflared
           
-          # Copy proot và loader vào jniLibs
-          cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
-          cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
-          cp ../output/*.so android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/*.so 2>/dev/null || true
-          
-          echo "=== jniLibs after copy ==="
-          ls -la android/app/src/main/jniLibs/arm64-v8a/
+          echo "=== Native libraries ==="
+          find android/app/src/main/jniLibs -name "*.so" -exec file {} \;
 
       # ============================================================
-      # CẤU HÌNH ANDROID (MainActivity, Manifest, packagingOptions)
+      # CẤU HÌNH ANDROID
       # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
           
-          # packagingOptions
+          # packagingOptions - cần cho multi-arch
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
           # MainActivity.kt
@@ -191,11 +162,9 @@ jobs:
               package="com.yourcompany.tunnel_controller">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
@@ -226,12 +195,12 @@ jobs:
           EOF
 
       # ============================================================
-      # BUILD APK
+      # BUILD APK (FULL ARCH)
       # ============================================================
-      - name: Build APK
+      - name: Build APK (full architecture)
         run: |
           cd tunnel_app
-          flutter build apk --release --target-platform android-arm64
+          flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
