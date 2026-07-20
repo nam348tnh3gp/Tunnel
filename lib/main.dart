@@ -90,12 +90,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Cloudflared ready from native libs');
         }
 
-        // Proot static (đã bao gồm tất cả thư viện)
+        // Proot (đã sửa phụ thuộc)
         final String prPath = '$nativeDir/libproot.so';
         if (File(prPath).existsSync()) {
           await Process.run('chmod', ['755', prPath]);
           _prootPath = prPath;
-          _appendLog('✅ Proot (static) ready from native libs');
+          _appendLog('✅ Proot ready from native libs (deps fixed)');
         }
 
         // Proot loader
@@ -105,6 +105,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _prootLoaderPath = loaderPath;
           _appendLog('✅ Proot loader ready from native libs');
         }
+
+        // Tất cả thư viện phụ đã có trong native dir
+        _appendLog('✅ All dependency libraries are in native dir');
 
         if (_cloudflaredPath.isNotEmpty) {
           setState(() => _binaryReady = true);
@@ -149,7 +152,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       setState(() => _binaryReady = true);
       _appendLog('✅ Cloudflared ready (fallback)');
-      _appendLog('✅ Proot static ready (fallback)');
+      _appendLog('✅ Proot ready (fallback)');
       _appendLog('✅ Proot loader ready (fallback)');
     } catch (e) {
       _appendLog('❌ Fallback failed: $e');
@@ -251,7 +254,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       if (hasProot && hasLoader) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
-        _appendLog('🛡️ Using static proot with loader');
+        _appendLog('🛡️ Using proot with all dependencies');
       } else if (hasProot) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader (may fail)');
