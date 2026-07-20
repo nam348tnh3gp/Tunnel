@@ -46,15 +46,7 @@ jobs:
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
 
       # ============================================================
-      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC
-      # ============================================================
-      - name: Find dependencies
-        run: |
-          echo "=== Dependencies of proot ==="
-          readelf -d output/proot | grep NEEDED
-
-      # ============================================================
-      # TẢI CÁC GÓI THƯ VIỆN
+      # TẢI CÁC GÓI THƯ VIỆN PHỤ THUỘC
       # ============================================================
       - name: Download dependency packages
         run: |
@@ -87,33 +79,65 @@ jobs:
           fi
 
       # ============================================================
-      # TẢI ALPINE ROOTFS
+      # TẢI ALPINE ROOTFS VÀO THƯ MỤC TẠM
       # ============================================================
       - name: Download Alpine rootfs
         run: |
-          mkdir -p tunnel_app/assets
-          wget -O tunnel_app/assets/alpine-rootfs.tar.gz \
+          mkdir -p alpine_rootfs
+          wget -O alpine_rootfs/alpine-rootfs.tar.gz \
             https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz
+          echo "=== Alpine rootfs downloaded ==="
+          ls -la alpine_rootfs/
 
       # ============================================================
-      # TẠO FLUTTER PROJECT
+      # TẠO FLUTTER PROJECT VÀ COPY TẤT CẢ FILE VÀO ĐÚNG THƯ MỤC
       # ============================================================
-      - name: Create Flutter project
+      - name: Create Flutter project and copy assets
         run: |
           flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
-          rm -rf tunnel_app/lib tunnel_app/pubspec.yaml tunnel_app/assets
-          cp -r lib tunnel_app/
-          cp pubspec.yaml tunnel_app/
-          mkdir -p tunnel_app/assets
           cd tunnel_app
           flutter pub get
+          
+          # Xóa thư mục assets và lib mặc định
+          rm -rf lib pubspec.yaml assets
+          
+          # Copy code và pubspec từ repo gốc
+          cp -r ../lib .
+          cp ../pubspec.yaml .
+          
+          # Tạo thư mục assets
+          mkdir -p assets
+          
+          # Copy tất cả binary vào assets
+          cp ../output/proot assets/proot
+          cp ../output/loader.elf assets/proot_loader
+          cp ../output/*.so assets/ 2>/dev/null || true
+          
+          # Copy cloudflared (sẽ tải sau)
+          
+          # Copy Alpine rootfs vào assets
+          cp ../alpine_rootfs/alpine-rootfs.tar.gz assets/
+          
+          echo "=== Assets after copy ==="
+          ls -la assets/
 
-      - name: Package binaries into APK
+      # ============================================================
+      # TẢI CLOUDFLARED VÀO JNILIBS VÀ ASSETS
+      # ============================================================
+      - name: Download cloudflared binary
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p assets
           
+          wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+          
+          # Copy cloudflared vào assets
+          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
+          chmod +x assets/cloudflared
+          
+          # Copy proot và loader vào jniLibs
           cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
@@ -121,28 +145,20 @@ jobs:
           cp ../output/*.so android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
           chmod +x android/app/src/main/jniLibs/arm64-v8a/*.so 2>/dev/null || true
           
-          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared 2>/dev/null || true
-          cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot 2>/dev/null || true
-          cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader 2>/dev/null || true
-          cp android/app/src/main/jniLibs/arm64-v8a/libtalloc.so assets/libtalloc.so 2>/dev/null || true
-          cp android/app/src/main/jniLibs/arm64-v8a/libandroid-shmem.so assets/libandroid-shmem.so 2>/dev/null || true
-          cp ../tunnel_app/assets/alpine-rootfs.tar.gz assets/alpine-rootfs.tar.gz 2>/dev/null || true
-          chmod +x assets/* 2>/dev/null || true
+          echo "=== jniLibs after copy ==="
+          ls -la android/app/src/main/jniLibs/arm64-v8a/
 
-      - name: Download cloudflared binary
-        run: |
-          cd tunnel_app
-          wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
-          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
-          chmod +x assets/cloudflared
-
+      # ============================================================
+      # CẤU HÌNH ANDROID (MainActivity, Manifest, packagingOptions)
+      # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
+          
+          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
+          # MainActivity.kt
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -168,6 +184,7 @@ jobs:
           }
           EOF
 
+          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -208,6 +225,9 @@ jobs:
           </manifest>
           EOF
 
+      # ============================================================
+      # BUILD APK
+      # ============================================================
       - name: Build APK
         run: |
           cd tunnel_app
