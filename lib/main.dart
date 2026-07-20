@@ -90,12 +90,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Cloudflared ready from native libs');
         }
 
-        // Proot
+        // Proot (đã được sửa SONAME, giờ tìm libtalloc.so)
         final String prPath = '$nativeDir/libproot.so';
         if (File(prPath).existsSync()) {
           await Process.run('chmod', ['755', prPath]);
           _prootPath = prPath;
-          _appendLog('✅ Proot ready from native libs');
+          _appendLog('✅ Proot ready from native libs (SONAME fixed)');
         }
 
         // Proot loader
@@ -106,21 +106,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Proot loader ready from native libs');
         }
 
-        // libtalloc.so (đã đổi tên)
+        // libtalloc.so (tên chuẩn, không có .2)
         final String tallocPath = '$nativeDir/libtalloc.so';
         if (File(tallocPath).existsSync()) {
           await Process.run('chmod', ['755', tallocPath]);
           _appendLog('✅ libtalloc.so ready from native libs');
-          
-          // Tạo symlink libtalloc.so.2 -> libtalloc.so
-          final String tallocLinkPath = '$nativeDir/libtalloc.so.2';
-          // Xóa link cũ nếu có
-          if (File(tallocLinkPath).existsSync()) {
-            await File(tallocLinkPath).delete();
-          }
-          // Tạo symlink
-          await Process.run('ln', ['-sf', tallocPath, tallocLinkPath]);
-          _appendLog('✅ Symlink libtalloc.so -> libtalloc.so.2 created');
         } else {
           _appendLog('⚠️ libtalloc.so not found in native libs');
         }
@@ -166,19 +156,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
       _prootLoaderPath = loaderPath;
 
-      // libtalloc.so
       final String tallocPath = '${dir.path}/libtalloc.so';
       if (!File(tallocPath).existsSync()) {
         final data = await rootBundle.load('assets/libtalloc.so');
         await File(tallocPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
         await Process.run('chmod', ['755', tallocPath]);
       }
-      // Tạo symlink libtalloc.so.2
-      final String tallocLinkPath = '${dir.path}/libtalloc.so.2';
-      if (File(tallocLinkPath).existsSync()) {
-        await File(tallocLinkPath).delete();
-      }
-      await Process.run('ln', ['-sf', tallocPath, tallocLinkPath]);
 
       setState(() => _binaryReady = true);
       _appendLog('✅ Cloudflared ready (fallback)');
@@ -285,7 +268,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       if (hasProot && hasLoader) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
-        _appendLog('🛡️ Using Termux proot with loader');
+        _appendLog('🛡️ Using Termux proot with loader (SONAME fixed)');
       } else if (hasProot) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader (may fail)');
@@ -294,7 +277,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _appendLog('⚠️ Proot not available, running directly');
       }
 
-      // LD_LIBRARY_PATH bao gồm native dir (chứa libtalloc.so và symlink)
       final String ldLibraryPath = _nativeDir.isNotEmpty
           ? '$_nativeDir:/system/lib64:/vendor/lib64'
           : '/system/lib64:/vendor/lib64';
