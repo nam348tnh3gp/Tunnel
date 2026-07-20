@@ -24,17 +24,13 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      # ============================================================
-      # TẢI PROOT + LOADER + LIBTALLOC TỪ TERMUX REPOSITORY
-      # ============================================================
-      
       - name: Download proot, loader and libtalloc from Termux
         run: |
           # Tải proot
           wget -O proot.deb \
             https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.85_aarch64.deb
           
-          # Tải libtalloc (thư viện còn thiếu)
+          # Tải libtalloc
           wget -O libtalloc.deb \
             https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
           
@@ -46,24 +42,14 @@ jobs:
           ar x libtalloc.deb
           tar -xvf data.tar.xz
           
-          # Tạo thư mục output
           mkdir -p output
-          
-          # Copy proot và loader
           cp data/data/com.termux/files/usr/bin/proot output/
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
+          # 👇 Đổi tên thành libtalloc.so (không có .2)
+          cp data/data/com.termux/files/usr/lib/libtalloc.so.2 output/libtalloc.so
           
-          # Copy libtalloc.so.2 (quan trọng!)
-          cp data/data/com.termux/files/usr/lib/libtalloc.so.2 output/
-          
-          # Kiểm tra
           echo "=== Files extracted ==="
           ls -la output/
-          file output/*
-
-      # ============================================================
-      # TẠO FLUTTER PROJECT & ĐÓNG GÓI BINARY
-      # ============================================================
 
       - name: Create Flutter project
         run: |
@@ -88,9 +74,9 @@ jobs:
           cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           
-          # libtalloc.so.2 (thư viện cần thiết)
-          cp ../output/libtalloc.so.2 android/app/src/main/jniLibs/arm64-v8a/
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libtalloc.so.2
+          # libtalloc.so (đã đổi tên, không có .2)
+          cp ../output/libtalloc.so android/app/src/main/jniLibs/arm64-v8a/
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libtalloc.so
 
       - name: Download cloudflared binary
         run: |
@@ -99,18 +85,12 @@ jobs:
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
-      # ============================================================
-      # CẤU HÌNH ANDROID
-      # ============================================================
-
       - name: Configure Android
         run: |
           cd tunnel_app
           
-          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # MainActivity.kt
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -136,7 +116,6 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -175,11 +154,11 @@ jobs:
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
           cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
-          cp android/app/src/main/jniLibs/arm64-v8a/libtalloc.so.2 assets/
+          cp android/app/src/main/jniLibs/arm64-v8a/libtalloc.so assets/libtalloc.so
           chmod +x assets/cloudflared
           chmod +x assets/proot
           chmod +x assets/proot_loader
-          chmod +x assets/libtalloc.so.2
+          chmod +x assets/libtalloc.so
 
       - name: Build APK
         run: |
