@@ -37,6 +37,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _log = '';
   String _cloudflaredPath = '';
   String _prootPath = '';
+  String _prootLoaderPath = '';
   bool _binaryReady = false;
 
   String _cpuInfo = '';
@@ -73,24 +74,35 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
 
       if (nativeDir != null && nativeDir.isNotEmpty) {
+        // Cloudflared
         final String cfPath = '$nativeDir/libcloudflared.so';
-        final String prPath = '$nativeDir/libproot.so';
-
-        // Cloudflared: dùng trực tiếp từ native libs
         if (File(cfPath).existsSync()) {
           await Process.run('chmod', ['755', cfPath]);
           _cloudflaredPath = cfPath;
           _appendLog('✅ Cloudflared ready');
         }
 
-        // Proot: copy ra thư mục files để chạy (tránh lỗi executable)
+        // Proot binary
+        final String prPath = '$nativeDir/libproot.so';
         if (File(prPath).existsSync()) {
+          // Copy ra app_flutter để chạy (tránh lỗi executable)
           final dir = await getApplicationDocumentsDirectory();
           final String destPath = '${dir.path}/proot';
           await File(prPath).copy(destPath);
           await Process.run('chmod', ['755', destPath]);
           _prootPath = destPath;
-          _appendLog('✅ Proot copied to ${destPath}');
+          _appendLog('✅ Proot copied to $destPath');
+        }
+
+        // Proot loader
+        final String loaderPath = '$nativeDir/libproot_loader.so';
+        if (File(loaderPath).existsSync()) {
+          final dir = await getApplicationDocumentsDirectory();
+          final String destLoaderPath = '${dir.path}/proot_loader';
+          await File(loaderPath).copy(destLoaderPath);
+          await Process.run('chmod', ['755', destLoaderPath]);
+          _prootLoaderPath = destLoaderPath;
+          _appendLog('✅ Proot loader copied to $destLoaderPath');
         }
 
         if (_cloudflaredPath.isNotEmpty) {
@@ -128,9 +140,19 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
       _prootPath = prPath;
 
+      // Proot loader
+      final String loaderPath = '${dir.path}/proot_loader';
+      if (!File(loaderPath).existsSync()) {
+        final data = await rootBundle.load('assets/proot_loader');
+        await File(loaderPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
+        await Process.run('chmod', ['755', loaderPath]);
+      }
+      _prootLoaderPath = loaderPath;
+
       setState(() => _binaryReady = true);
       _appendLog('✅ Cloudflared ready (fallback)');
       _appendLog('✅ Proot ready (fallback)');
+      _appendLog('✅ Proot loader ready (fallback)');
     } catch (e) {
       _appendLog('❌ Fallback failed: $e');
     }
@@ -198,25 +220,35 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       String cmd;
       final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
 
-      if (hasProot) {
-        // Dùng proot mount resolv.conf (chạy từ thư mục files)
+      if (hasProot && _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync()) {
+        // Dùng proot mount resolv.conf, kèm loader
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
-        _appendLog('🛡️ Using proot for DNS bypass');
+        _appendLog('🛡️ Using proot with loader for DNS bypass');
+      } else if (hasProot) {
+        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
+        _appendLog('⚠️ Proot without loader (may fail)');
       } else {
-        // Chạy trực tiếp
         cmd = '$_cloudflaredPath ${args.join(' ')}';
         _appendLog('⚠️ Proot not available, running directly');
+      }
+
+      // Môi trường cho proot
+      final Map<String, String> env = {
+        'PATH': '/system/bin:/system/xbin:/vendor/bin',
+        'ANDROID_ROOT': '/system',
+        'LD_LIBRARY_PATH': '/system/lib64:/vendor/lib64',
+        'PROOT_TMP_DIR': '/data/local/tmp',
+        'PROOT_NO_SECCOMP': '1', // Tránh lỗi seccomp trên một số thiết bị
+      };
+      if (_prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync()) {
+        env['PROOT_UNBUNDLE_LOADER'] = _prootLoaderPath;
       }
 
       _process = await Process.start(
         '/system/bin/sh',
         ['-c', cmd],
         runInShell: false,
-        environment: {
-          'PATH': '/system/bin:/system/xbin:/vendor/bin',
-          'ANDROID_ROOT': '/system',
-          'LD_LIBRARY_PATH': '/system/lib64:/vendor/lib64',
-        },
+        environment: env,
       );
 
       _isRunning = true;
