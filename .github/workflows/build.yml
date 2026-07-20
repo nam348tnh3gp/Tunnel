@@ -25,46 +25,59 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # BUILD PROOT TỪ TERMUX SOURCE (theo cách cộng đồng)
+      # BUILD PROOT TRONG DOCKER TERMUX (môi trường chính xác)
       # ============================================================
       
-      - name: Install build dependencies
+      - name: Build proot and loader using Termux Docker
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libarchive-dev \
-            libtalloc-dev \
-            uthash-dev \
-            git \
-            make \
-            gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu
-
-      - name: Checkout Termux proot source
-        uses: actions/checkout@v4
-        with:
-          repository: termux/proot
-          path: proot-source
-          ref: master
-
-      - name: Build proot and loader for ARM64
-        run: |
-          cd proot-source/src
+          # Tạo script build bên trong container
+          cat > build-proot.sh << 'EOF'
+          #!/bin/bash
+          set -e
           
-          # Thiết lập cross-compile
-          export CC=aarch64-linux-gnu-gcc
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export ARCH=aarch64
+          echo "=== Installing build dependencies ==="
+          pkg update -y
+          pkg install -y binutils make gcc libtalloc-dev uthash-dev libarchive-dev git
           
-          # Build (theo cách Termux làm)
+          echo "=== Cloning Termux proot source ==="
+          git clone https://github.com/termux/proot.git
+          cd proot/src
+          
+          echo "=== Building proot and loader ==="
+          # Build config
           make build.h
-          make loader.elf
+          
+          # Build loader (Termux tự động xử lý cả 32 và 64-bit)
+          make loader.elf loader-m32.elf
+          
+          # Build proot binary
           make proot
           
-          # Kiểm tra kết quả
-          ls -la proot loader.elf
-          file proot loader.elf
+          echo "=== Build completed ==="
+          ls -la proot loader.elf loader-m32.elf
+          
+          # Copy ra ngoài
+          cp proot /output/
+          cp loader.elf /output/
+          cp loader-m32.elf /output/ 2>/dev/null || true
+          EOF
+          
+          chmod +x build-proot.sh
+          
+          # Tạo thư mục output
+          mkdir -p output
+          
+          # Chạy Docker Termux và mount volume
+          docker run --rm \
+            -v $(pwd):/workspace \
+            -v $(pwd)/output:/output \
+            -w /workspace \
+            termux/termux-docker \
+            /bin/bash -c "/workspace/build-proot.sh"
+          
+          # Kiểm tra output
+          echo "=== Output files ==="
+          ls -la output/
 
       # ============================================================
       # TẠO FLUTTER PROJECT & ĐÓNG GÓI
@@ -85,12 +98,12 @@ jobs:
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Proot binary (đặt tên libproot.so)
-          cp ../proot-source/src/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          # Proot binary
+          cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           
-          # Proot loader (đặt tên libproot_loader.so)
-          cp ../proot-source/src/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          # Proot loader (64-bit)
+          cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
 
       - name: Download cloudflared binary
@@ -108,10 +121,8 @@ jobs:
         run: |
           cd tunnel_app
           
-          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # MainActivity.kt
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -137,7 +148,6 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
