@@ -25,13 +25,16 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # TẢI PROOT VÀ CÁC THƯ VIỆN PHỤ THUỘC (giữ nguyên)
+      # CÀI ĐẶT CÔNG CỤ
       # ============================================================
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y patchelf binutils
 
+      # ============================================================
+      # TẢI PROOT VÀ GIẢI NÉN
+      # ============================================================
       - name: Download proot deb
         run: |
           wget -O proot.deb \
@@ -42,6 +45,17 @@ jobs:
           cp data/data/com.termux/files/usr/bin/proot output/
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
 
+      # ============================================================
+      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC
+      # ============================================================
+      - name: Find dependencies
+        run: |
+          echo "=== Dependencies of proot ==="
+          readelf -d output/proot | grep NEEDED
+
+      # ============================================================
+      # TẢI CÁC GÓI THƯ VIỆN
+      # ============================================================
       - name: Download dependency packages
         run: |
           mkdir -p libs_output
@@ -55,6 +69,9 @@ jobs:
           done
           find data -name "*.so*" -exec cp {} libs_output/ \;
 
+      # ============================================================
+      # SỬA TÊN FILE .so VÀ SỬA NEEDED CỦA PROOT
+      # ============================================================
       - name: Fix library names and proot dependencies
         run: |
           for lib in libs_output/*.so*; do
@@ -70,7 +87,7 @@ jobs:
           fi
 
       # ============================================================
-      # TẢI ALPINE ROOTFS (giống OpenClaw-Termux)
+      # TẢI ALPINE ROOTFS
       # ============================================================
       - name: Download Alpine rootfs
         run: |
