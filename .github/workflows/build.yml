@@ -25,29 +25,34 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # BUILD PROOT + LOADER BẰNG build-proot-android (Cộng đồng)
+      # TẢI PROOT + LOADER TỪ TERMUX PACKAGES (Không cần build)
       # ============================================================
       
-      - name: Build proot and loader using build-proot-android
+      - name: Download proot and loader from Termux packages
         run: |
-          # Clone công cụ build của cộng đồng
-          git clone https://github.com/green-green-avk/build-proot-android
-          cd build-proot-android
+          mkdir -p output
+          cd output
           
-          # Cấu hình chỉ build cho ARM64 (aarch64)
-          sed -i 's/^ARCHS=.*/ARCHS="aarch64"/' config
+          # Tải package proot cho ARM64
+          curl -L -o proot.deb \
+            https://packages.termux.org/apt/termux-main/pool/main/p/proot/proot_5.3.0-3_aarch64.deb
           
-          # Chạy script build (tự động tải NDK và build)
-          ./build.sh
+          # Giải nén .deb
+          ar x proot.deb
           
-          # Tạo thư mục output và copy file
-          mkdir -p ../output
-          cp build/root-aarch64/root/bin/proot ../output/
-          cp build/root-aarch64/root/libexec/proot/loader ../output/loader.elf
+          # Giải nén data.tar.xz
+          tar xf data.tar.xz
           
-          cd ..
-          echo "=== Build completed ==="
-          ls -la output/
+          # Lấy binary và loader
+          cp data/data/com.termux/files/usr/bin/proot .
+          cp data/data/com.termux/files/usr/libexec/proot/loader .
+          
+          # Cấp quyền
+          chmod +x proot loader
+          
+          # Kiểm tra
+          file proot loader
+          ls -la
 
       # ============================================================
       # TẠO FLUTTER PROJECT & ĐÓNG GÓI BINARY
@@ -73,7 +78,7 @@ jobs:
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           
           # Proot loader
-          cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          cp ../output/loader android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
 
       - name: Download cloudflared binary
