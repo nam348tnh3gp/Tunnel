@@ -40,14 +40,14 @@ jobs:
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Tải proot binary
+          # Proot binary (Termux fork)
           wget -O android/app/src/main/jniLibs/arm64-v8a/libproot.so \
             https://skirsten.github.io/proot-portable-android-binaries/aarch64/proot
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
-          
-          # Tải loader (cần thiết để proot hoạt động)
+
+          # Proot loader (từ Termux source)
           wget -O android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so \
-            https://skirsten.github.io/proot-portable-android-binaries/aarch64/loader
+            https://raw.githubusercontent.com/termux/proot/master/src/loader.elf
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
 
       - name: Download cloudflared binary
