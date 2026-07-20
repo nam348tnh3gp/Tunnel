@@ -82,15 +82,15 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Cloudflared ready from native libs');
         }
 
-        // Proot (từ Termux)
+        // Proot
         final String prPath = '$nativeDir/libproot.so';
         if (File(prPath).existsSync()) {
           await Process.run('chmod', ['755', prPath]);
           _prootPath = prPath;
-          _appendLog('✅ Proot (Termux) ready from native libs');
+          _appendLog('✅ Proot ready from native libs');
         }
 
-        // Proot loader (nếu có)
+        // Proot loader
         final String loaderPath = '$nativeDir/libproot_loader.so';
         if (File(loaderPath).existsSync()) {
           await Process.run('chmod', ['755', loaderPath]);
@@ -205,8 +205,15 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      // Tạo resolv.conf giả
+      // Tạo thư mục tạm cho proot (tránh lỗi Permission denied)
       final tempDir = await getTemporaryDirectory();
+      final prootTmpDir = '${tempDir.path}/proot_tmp';
+      final prootTmp = Directory(prootTmpDir);
+      if (!await prootTmp.exists()) {
+        await prootTmp.create(recursive: true);
+      }
+
+      // Tạo resolv.conf giả
       final resolvFile = File('${tempDir.path}/resolv.conf');
       await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
 
@@ -214,9 +221,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
 
       if (hasProot && _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync()) {
-        // Dùng proot Termux với loader
+        // Dùng proot với loader và mount resolv.conf
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
-        _appendLog('🛡️ Using Termux proot with loader');
+        _appendLog('🛡️ Using proot with loader');
       } else if (hasProot) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader (may fail)');
@@ -225,16 +232,21 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _appendLog('⚠️ Proot not available, running directly');
       }
 
-      // Môi trường giống Termux
+      // Môi trường đầy đủ cho proot
       final Map<String, String> env = {
         'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
         'ANDROID_ROOT': '/system',
-        'LD_LIBRARY_PATH': '/system/lib64:/vendor/lib64:/data/data/com.termux/files/usr/lib',
-        'PROOT_TMP_DIR': '/data/local/tmp',
+        'LD_LIBRARY_PATH': '/system/lib64:/vendor/lib64',
+        'PROOT_TMP_DIR': prootTmpDir,  // Quan trọng: set đúng thư mục tạm
         'PROOT_NO_SECCOMP': '1',
-        if (_prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync())
-          'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
+        'TMPDIR': prootTmpDir,         // Thêm cho các ứng dụng khác
+        'TEMP': prootTmpDir,
+        'TMP': prootTmpDir,
       };
+      
+      if (_prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync()) {
+        env['PROOT_UNBUNDLE_LOADER'] = _prootLoaderPath;
+      }
 
       _process = await Process.start(
         '/system/bin/sh',
