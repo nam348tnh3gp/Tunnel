@@ -46,78 +46,68 @@ jobs:
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
 
       # ============================================================
-      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC CỦA PROOT
+      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC (chỉ để tham khảo, không dùng)
       # ============================================================
       - name: Find dependencies
         run: |
           echo "=== Dependencies of proot ==="
           readelf -d output/proot | grep NEEDED
-          # Lấy danh sách tên thư viện (loại bỏ [])
-          readelf -d output/proot | grep NEEDED | awk -F'[][]' '{print $2}' > deps.txt
-          cat deps.txt
-          # Chuyển tên thư viện sang tên gói Termux (map thủ công)
-          # libtalloc.so.2 -> libtalloc
-          # libandroid-shmem.so.0 -> libandroid-shmem
-          # libandroid-glob.so.0 -> libandroid-glob
-          # Nếu có thêm, bổ sung
-          cat deps.txt | sed 's/\.so\.[0-9]*//g' | sed 's/^lib//g' > pkg_names.txt
-          echo "=== Package names ==="
-          cat pkg_names.txt
 
       # ============================================================
-      # TẢI CÁC GÓI THƯ VIỆN TỪ TERMUX
+      # TẢI CÁC GÓI THƯ VIỆN CỤ THỂ (dùng link chính xác)
       # ============================================================
       - name: Download dependency packages
         run: |
           mkdir -p libs_output
-          # Map các thư viện cần thiết (dựa trên kinh nghiệm)
-          # Termux package naming: lib<name> (ví dụ libtalloc, libandroid-shmem)
-          for pkg in talloc android-shmem android-glob; do
-            echo "Downloading lib$pkg..."
-            # Tìm phiên bản mới nhất từ repo (dùng wget thử các phiên bản)
-            # Cách đơn giản: thử tải từ link cố định phiên bản gần đây
-            wget -O lib$pkg.deb \
-              https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/lib$pkg/lib$pkg/lib$pkg_*.aarch64.deb 2>/dev/null || \
-            wget -O lib$pkg.deb \
-              https://packages.termux.dev/apt/termux-main/pool/main/lib$pkg/lib$pkg/lib$pkg_*.aarch64.deb 2>/dev/null || true
-            if [ -f lib$pkg.deb ]; then
-              ar x lib$pkg.deb
-              tar -xvf data.tar.xz
-              # Tìm file .so và copy vào libs_output
-              find data -name "*.so*" -exec cp {} libs_output/ \;
-            else
-              echo "lib$pkg not found, skipping..."
-            fi
+          
+          # Tải libtalloc (phiên bản 2.4.3)
+          wget -O libtalloc.deb \
+            https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
+          
+          # Tải libandroid-shmem (phiên bản 0.4.1)
+          wget -O libandroid-shmem.deb \
+            https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.4.1_aarch64.deb
+          
+          # Giải nén tất cả .deb
+          for deb in *.deb; do
+            ar x $deb
+            tar -xvf data.tar.xz
           done
+          
+          # Tìm tất cả .so và copy vào libs_output
+          find data -name "*.so*" -exec cp {} libs_output/ \;
+          
           echo "=== Libraries collected ==="
           ls -la libs_output/
 
       # ============================================================
-      # SỬA TÊN FILE .so CHO PHÙ HỢP VỚI ANDROID
+      # SỬA TÊN FILE .so (bỏ số phiên bản) VÀ SỬA NEEDED CỦA PROOT
       # ============================================================
-      - name: Fix library names and dependencies
+      - name: Fix library names and proot dependencies
         run: |
-          # Đổi tên các file .so.2 hoặc .so.0 thành .so
+          # Đổi tên .so.2, .so.0 -> .so
           for lib in libs_output/*.so*; do
             if [[ $lib == *.so.* ]]; then
               newname=$(echo $lib | sed 's/\.[0-9]*$//')
               mv $lib $newname
             fi
           done
-          # Copy vào output cùng với proot và loader
+          
+          # Copy các .so vào output
           cp libs_output/*.so output/ 2>/dev/null || true
-          # Sửa NEEDED của proot: từ .so.2 -> .so
+          
+          # Sửa NEEDED của proot
           cd output
-          # Lấy danh sách NEEDED hiện tại
-          needed=$(readelf -d proot | grep NEEDED | awk -F'[][]' '{print $2}')
-          for lib in $needed; do
-            # Nếu lib chứa .so. số, thay bằng .so
-            newlib=$(echo $lib | sed 's/\.[0-9]*$//')
-            if [ "$lib" != "$newlib" ]; then
-              echo "Replacing $lib with $newlib"
-              patchelf --replace-needed $lib $newlib proot
-            fi
-          done
+          # Thay libtalloc.so.2 -> libtalloc.so
+          if readelf -d proot | grep -q "libtalloc.so.2"; then
+            patchelf --replace-needed libtalloc.so.2 libtalloc.so proot
+          fi
+          # Thay libandroid-shmem.so -> libandroid-shmem.so (không có số phiên bản)
+          if readelf -d proot | grep -q "libandroid-shmem.so"; then
+            # Nếu NEEDED là libandroid-shmem.so (không có số), giữ nguyên
+            echo "libandroid-shmem.so is already correct"
+          fi
+          # Kiểm tra lại
           echo "=== Fixed proot dependencies ==="
           readelf -d proot | grep NEEDED
           ls -la
