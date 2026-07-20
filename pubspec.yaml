@@ -25,3 +25,4 @@ flutter:
     - assets/proot_loader
     - assets/libtalloc.so
     - assets/libandroid-shmem.so
+    - assets/bootstrap.sh
