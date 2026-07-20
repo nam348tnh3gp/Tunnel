@@ -90,12 +90,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Cloudflared ready from native libs');
         }
 
-        // Proot (đã được sửa SONAME, giờ tìm libtalloc.so)
+        // Proot static (đã bao gồm tất cả thư viện)
         final String prPath = '$nativeDir/libproot.so';
         if (File(prPath).existsSync()) {
           await Process.run('chmod', ['755', prPath]);
           _prootPath = prPath;
-          _appendLog('✅ Proot ready from native libs (SONAME fixed)');
+          _appendLog('✅ Proot (static) ready from native libs');
         }
 
         // Proot loader
@@ -104,15 +104,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           await Process.run('chmod', ['755', loaderPath]);
           _prootLoaderPath = loaderPath;
           _appendLog('✅ Proot loader ready from native libs');
-        }
-
-        // libtalloc.so (tên chuẩn, không có .2)
-        final String tallocPath = '$nativeDir/libtalloc.so';
-        if (File(tallocPath).existsSync()) {
-          await Process.run('chmod', ['755', tallocPath]);
-          _appendLog('✅ libtalloc.so ready from native libs');
-        } else {
-          _appendLog('⚠️ libtalloc.so not found in native libs');
         }
 
         if (_cloudflaredPath.isNotEmpty) {
@@ -156,18 +147,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
       _prootLoaderPath = loaderPath;
 
-      final String tallocPath = '${dir.path}/libtalloc.so';
-      if (!File(tallocPath).existsSync()) {
-        final data = await rootBundle.load('assets/libtalloc.so');
-        await File(tallocPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
-        await Process.run('chmod', ['755', tallocPath]);
-      }
-
       setState(() => _binaryReady = true);
       _appendLog('✅ Cloudflared ready (fallback)');
-      _appendLog('✅ Proot ready (fallback)');
+      _appendLog('✅ Proot static ready (fallback)');
       _appendLog('✅ Proot loader ready (fallback)');
-      _appendLog('✅ libtalloc.so ready (fallback)');
     } catch (e) {
       _appendLog('❌ Fallback failed: $e');
     }
@@ -268,7 +251,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       if (hasProot && hasLoader) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
-        _appendLog('🛡️ Using Termux proot with loader (SONAME fixed)');
+        _appendLog('🛡️ Using static proot with loader');
       } else if (hasProot) {
         cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf $_cloudflaredPath ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader (may fail)');
