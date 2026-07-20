@@ -22,4 +22,5 @@ flutter:
   assets:
     - assets/cloudflared
     - assets/proot
-    - assets/proot_loader  
+    - assets/proot_loader
+    - assets/libtalloc.so.2 
