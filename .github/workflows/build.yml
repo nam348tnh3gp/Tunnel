@@ -25,14 +25,14 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # BUILD PROOT TRONG DOCKER TERMUX (môi trường chính xác)
+      # BUILD PROOT TRONG DOCKER TERMUX (Môi trường chính xác)
       # ============================================================
       
       - name: Build proot and loader using Termux Docker
         run: |
-          # Tạo script build bên trong container
+          # Tạo script build để chạy bên trong container Termux
           cat > build-proot.sh << 'EOF'
-          #!/bin/bash
+          #!/data/data/com.termux/files/usr/bin/bash
           set -e
           
           echo "=== Installing build dependencies ==="
@@ -56,7 +56,7 @@ jobs:
           echo "=== Build completed ==="
           ls -la proot loader.elf loader-m32.elf
           
-          # Copy ra ngoài
+          # Copy ra ngoài volume
           cp proot /output/
           cp loader.elf /output/
           cp loader-m32.elf /output/ 2>/dev/null || true
@@ -64,7 +64,7 @@ jobs:
           
           chmod +x build-proot.sh
           
-          # Tạo thư mục output
+          # Tạo thư mục output để nhận file từ container
           mkdir -p output
           
           # Chạy Docker Termux và mount volume
@@ -80,7 +80,7 @@ jobs:
           ls -la output/
 
       # ============================================================
-      # TẠO FLUTTER PROJECT & ĐÓNG GÓI
+      # TẠO FLUTTER PROJECT & ĐÓNG GÓI BINARY
       # ============================================================
 
       - name: Create Flutter project
@@ -114,15 +114,17 @@ jobs:
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
       # ============================================================
-      # CẤU HÌNH ANDROID
+      # CẤU HÌNH ANDROID (Manifest, MainActivity, packaging)
       # ============================================================
 
       - name: Configure Android
         run: |
           cd tunnel_app
           
+          # packagingOptions - bắt buộc để Android giải nén .so
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
+          # MainActivity.kt - cung cấp MethodChannel để lấy native lib dir
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -148,6 +150,7 @@ jobs:
           }
           EOF
 
+          # AndroidManifest.xml - quyền INTERNET
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -182,7 +185,7 @@ jobs:
           </manifest>
           EOF
 
-          # Fallback assets
+          # Copy vào assets fallback
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
           cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
