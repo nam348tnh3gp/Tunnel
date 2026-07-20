@@ -24,6 +24,17 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
+      # ============================================================
+      # CÀI ĐẶT PATCHELF
+      # ============================================================
+      - name: Install patchelf
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+
+      # ============================================================
+      # TẢI PROOT, LOADER, LIBTALLOC
+      # ============================================================
       - name: Download proot, loader and libtalloc from Termux
         run: |
           # Tải proot
@@ -45,12 +56,28 @@ jobs:
           mkdir -p output
           cp data/data/com.termux/files/usr/bin/proot output/
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
-          # 👇 Đổi tên thành libtalloc.so (không có .2)
-          cp data/data/com.termux/files/usr/lib/libtalloc.so.2 output/libtalloc.so
+          # 👇 Copy libtalloc.so.2 (giữ nguyên tên, sẽ đổi sau trong code)
+          cp data/data/com.termux/files/usr/lib/libtalloc.so.2 output/
+
+      # ============================================================
+      # SỬA SONAME CỦA libproot.so (patchelf)
+      # ============================================================
+      - name: Fix SONAME of libproot.so
+        run: |
+          # Đổi tên libtalloc.so.2 -> libtalloc.so (cho đúng tên Android)
+          cp output/libtalloc.so.2 output/libtalloc.so
           
-          echo "=== Files extracted ==="
+          # Dùng patchelf để thay đổi NEEDED từ libtalloc.so.2 -> libtalloc.so
+          patchelf --replace-needed libtalloc.so.2 libtalloc.so output/proot
+          
+          # Kiểm tra thay đổi
+          patchelf --print-needed output/proot
+          echo "=== Fixed proot ==="
           ls -la output/
 
+      # ============================================================
+      # TẠO FLUTTER PROJECT & ĐÓNG GÓI
+      # ============================================================
       - name: Create Flutter project
         run: |
           flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
@@ -66,7 +93,7 @@ jobs:
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Proot binary
+          # Proot binary (đã sửa SONAME)
           cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           
@@ -74,7 +101,7 @@ jobs:
           cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           
-          # libtalloc.so (đã đổi tên, không có .2)
+          # libtalloc.so (tên chuẩn, không có .2)
           cp ../output/libtalloc.so android/app/src/main/jniLibs/arm64-v8a/
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libtalloc.so
 
@@ -85,6 +112,9 @@ jobs:
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
+      # ============================================================
+      # CẤU HÌNH ANDROID
+      # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
