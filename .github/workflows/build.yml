@@ -25,34 +25,44 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # TẢI PROOT + LOADER TỪ TERMUX PACKAGES (Không cần build)
+      # CÀI PYTHON 2 ĐỂ BUILD PROOT (waf yêu cầu Python 2)
       # ============================================================
       
-      - name: Download proot and loader from Termux packages
+      - name: Install Python 2
         run: |
-          mkdir -p output
-          cd output
-          
-          # Tải package proot cho ARM64
-          curl -L -o proot.deb \
-            https://packages.termux.org/apt/termux-main/pool/main/p/proot/proot_5.3.0-3_aarch64.deb
-          
-          # Giải nén .deb
-          ar x proot.deb
-          
-          # Giải nén data.tar.xz
-          tar xf data.tar.xz
-          
-          # Lấy binary và loader
-          cp data/data/com.termux/files/usr/bin/proot .
-          cp data/data/com.termux/files/usr/libexec/proot/loader .
-          
-          # Cấp quyền
-          chmod +x proot loader
-          
+          sudo apt-get update
+          sudo apt-get install -y python2
+          # Tạo symlink để python trỏ đến python2
+          sudo ln -sf /usr/bin/python2 /usr/local/bin/python
           # Kiểm tra
-          file proot loader
-          ls -la
+          python --version
+
+      # ============================================================
+      # BUILD PROOT + LOADER BẰNG build-proot-android
+      # ============================================================
+      
+      - name: Build proot and loader using build-proot-android
+        run: |
+          # Clone công cụ build của cộng đồng
+          git clone https://github.com/green-green-avk/build-proot-android
+          cd build-proot-android
+          
+          # Cấu hình chỉ build cho ARM64 (aarch64)
+          sed -i 's/^ARCHS=.*/ARCHS="aarch64"/' config
+          
+          # Chạy script build với Python 2
+          # Đảm bảo PATH có python2
+          export PATH=/usr/local/bin:$PATH
+          ./build.sh
+          
+          # Tạo thư mục output và copy file
+          mkdir -p ../output
+          cp build/root-aarch64/root/bin/proot ../output/
+          cp build/root-aarch64/root/libexec/proot/loader ../output/loader.elf
+          
+          cd ..
+          echo "=== Build completed ==="
+          ls -la output/
 
       # ============================================================
       # TẠO FLUTTER PROJECT & ĐÓNG GÓI BINARY
@@ -78,7 +88,7 @@ jobs:
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           
           # Proot loader
-          cp ../output/loader android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
 
       - name: Download cloudflared binary
