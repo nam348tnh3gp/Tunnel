@@ -25,52 +25,106 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # BUILD PROOT STATIC BINARY (KHÔNG PHỤ THUỘC THƯ VIỆN NGOÀI)
+      # CÀI ĐẶT CÔNG CỤ
       # ============================================================
-      
-      - name: Install build dependencies
+      - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libarchive-dev \
-            libtalloc-dev \
-            uthash-dev \
-            git \
-            make \
-            gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu
+          sudo apt-get install -y patchelf binutils
 
-      - name: Checkout Termux proot source
-        uses: actions/checkout@v4
-        with:
-          repository: termux/proot
-          path: proot-source
-          ref: master
-
-      - name: Build proot static for Android ARM64
+      # ============================================================
+      # TẢI PROOT VÀ GIẢI NÉN
+      # ============================================================
+      - name: Download proot deb
         run: |
-          cd proot-source/src
-          
-          # Thiết lập cross-compile
-          export CC=aarch64-linux-gnu-gcc
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export ARCH=aarch64
-          
-          # Build với flag static
-          make build.h
-          make loader.elf
-          make LDFLAGS="-static" proot
-          
-          # Kiểm tra file static
-          file proot
-          ls -la proot
-          
-          # Copy ra output
-          mkdir -p ../output
-          cp proot ../output/
-          cp loader.elf ../output/
+          wget -O proot.deb \
+            https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.85_aarch64.deb
+          ar x proot.deb
+          tar -xvf data.tar.xz
+          mkdir -p output
+          cp data/data/com.termux/files/usr/bin/proot output/
+          cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
 
+      # ============================================================
+      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC CỦA PROOT
+      # ============================================================
+      - name: Find dependencies
+        run: |
+          echo "=== Dependencies of proot ==="
+          readelf -d output/proot | grep NEEDED
+          # Lấy danh sách tên thư viện (loại bỏ [])
+          readelf -d output/proot | grep NEEDED | awk -F'[][]' '{print $2}' > deps.txt
+          cat deps.txt
+          # Chuyển tên thư viện sang tên gói Termux (map thủ công)
+          # libtalloc.so.2 -> libtalloc
+          # libandroid-shmem.so.0 -> libandroid-shmem
+          # libandroid-glob.so.0 -> libandroid-glob
+          # Nếu có thêm, bổ sung
+          cat deps.txt | sed 's/\.so\.[0-9]*//g' | sed 's/^lib//g' > pkg_names.txt
+          echo "=== Package names ==="
+          cat pkg_names.txt
+
+      # ============================================================
+      # TẢI CÁC GÓI THƯ VIỆN TỪ TERMUX
+      # ============================================================
+      - name: Download dependency packages
+        run: |
+          mkdir -p libs_output
+          # Map các thư viện cần thiết (dựa trên kinh nghiệm)
+          # Termux package naming: lib<name> (ví dụ libtalloc, libandroid-shmem)
+          for pkg in talloc android-shmem android-glob; do
+            echo "Downloading lib$pkg..."
+            # Tìm phiên bản mới nhất từ repo (dùng wget thử các phiên bản)
+            # Cách đơn giản: thử tải từ link cố định phiên bản gần đây
+            wget -O lib$pkg.deb \
+              https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/lib$pkg/lib$pkg/lib$pkg_*.aarch64.deb 2>/dev/null || \
+            wget -O lib$pkg.deb \
+              https://packages.termux.dev/apt/termux-main/pool/main/lib$pkg/lib$pkg/lib$pkg_*.aarch64.deb 2>/dev/null || true
+            if [ -f lib$pkg.deb ]; then
+              ar x lib$pkg.deb
+              tar -xvf data.tar.xz
+              # Tìm file .so và copy vào libs_output
+              find data -name "*.so*" -exec cp {} libs_output/ \;
+            else
+              echo "lib$pkg not found, skipping..."
+            fi
+          done
+          echo "=== Libraries collected ==="
+          ls -la libs_output/
+
+      # ============================================================
+      # SỬA TÊN FILE .so CHO PHÙ HỢP VỚI ANDROID
+      # ============================================================
+      - name: Fix library names and dependencies
+        run: |
+          # Đổi tên các file .so.2 hoặc .so.0 thành .so
+          for lib in libs_output/*.so*; do
+            if [[ $lib == *.so.* ]]; then
+              newname=$(echo $lib | sed 's/\.[0-9]*$//')
+              mv $lib $newname
+            fi
+          done
+          # Copy vào output cùng với proot và loader
+          cp libs_output/*.so output/ 2>/dev/null || true
+          # Sửa NEEDED của proot: từ .so.2 -> .so
+          cd output
+          # Lấy danh sách NEEDED hiện tại
+          needed=$(readelf -d proot | grep NEEDED | awk -F'[][]' '{print $2}')
+          for lib in $needed; do
+            # Nếu lib chứa .so. số, thay bằng .so
+            newlib=$(echo $lib | sed 's/\.[0-9]*$//')
+            if [ "$lib" != "$newlib" ]; then
+              echo "Replacing $lib with $newlib"
+              patchelf --replace-needed $lib $newlib proot
+            fi
+          done
+          echo "=== Fixed proot dependencies ==="
+          readelf -d proot | grep NEEDED
+          ls -la
+
+      # ============================================================
+      # TẠO FLUTTER PROJECT & ĐÓNG GÓI
+      # ============================================================
       - name: Create Flutter project
         run: |
           flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
@@ -81,20 +135,20 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      - name: Package proot static into APK
+      - name: Package binaries into APK
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Proot static binary (đã bao gồm tất cả thư viện)
-          cp ../proot-source/output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          # Proot và loader
+          cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
-          
-          # Proot loader
-          cp ../proot-source/output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           
-          # KHÔNG CẦN libtalloc.so hay libandroid-shmem.so nữa!
+          # Tất cả thư viện phụ thuộc
+          cp ../output/*.so android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/*.so 2>/dev/null || true
 
       - name: Download cloudflared binary
         run: |
@@ -169,12 +223,8 @@ jobs:
           EOF
 
           # Fallback assets
-          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
-          cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
-          cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
-          chmod +x assets/cloudflared
-          chmod +x assets/proot
-          chmod +x assets/proot_loader
+          cp android/app/src/main/jniLibs/arm64-v8a/* assets/ 2>/dev/null || true
+          chmod +x assets/* 2>/dev/null || true
 
       - name: Build APK
         run: |
