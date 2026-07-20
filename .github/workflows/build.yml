@@ -34,15 +34,15 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      # ------------------ TẢI BINARY CÓ SẴN (Phương án 1) ------------------
-      - name: Download proot binary from portable binaries
+      # ------------------ TẢI PROOT (link chuẩn) ------------------
+      - name: Download proot binary for ARM64
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           
-          # Tải proot (Termux fork) từ prebuilt repository
+          # Link chuẩn từ skirsten.github.io
           wget -O android/app/src/main/jniLibs/arm64-v8a/libproot.so \
-            https://github.com/skirsten/proot-portable-android-binaries/raw/main/aarch64/proot
+            https://skirsten.github.io/proot-portable-android-binaries/aarch64/proot
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
 
       - name: Download cloudflared binary
