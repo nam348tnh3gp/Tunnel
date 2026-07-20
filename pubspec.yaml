@@ -21,8 +21,3 @@ flutter:
   uses-material-design: true
   assets:
     - assets/cloudflared
-    - assets/proot
-    - assets/proot_loader
-    - assets/libtalloc.so
-    - assets/libandroid-shmem.so
-    - assets/alpine-rootfs.tar.gz   # Alpine rootfs từ Alpine Linux
