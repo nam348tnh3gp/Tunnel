@@ -39,7 +39,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _cloudflaredPath = '';
   String _prootPath = '';
   String _prootLoaderPath = '';
-  String _nativeDir = ''; // 👈 Lưu đường dẫn native libs
+  String _nativeDir = '';
   bool _binaryReady = false;
 
   String _cpuInfo = '';
@@ -79,7 +79,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
 
       if (nativeDir != null && nativeDir.isNotEmpty) {
-        _nativeDir = nativeDir; // 👈 Lưu để dùng sau
+        _nativeDir = nativeDir;
+        _appendLog('📁 Native dir: $_nativeDir');
 
         // Cloudflared
         final String cfPath = '$nativeDir/libcloudflared.so';
@@ -89,12 +90,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Cloudflared ready from native libs');
         }
 
-        // Proot (Termux fork)
+        // Proot
         final String prPath = '$nativeDir/libproot.so';
         if (File(prPath).existsSync()) {
           await Process.run('chmod', ['755', prPath]);
           _prootPath = prPath;
-          _appendLog('✅ Proot (Termux) ready from native libs');
+          _appendLog('✅ Proot ready from native libs');
         }
 
         // Proot loader
@@ -105,13 +106,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           _appendLog('✅ Proot loader ready from native libs');
         }
 
-        // Kiểm tra libtalloc.so.2 (có thể không cần vì đã ở cùng thư mục)
+        // libtalloc.so.2
         final String tallocPath = '$nativeDir/libtalloc.so.2';
         if (File(tallocPath).existsSync()) {
           await Process.run('chmod', ['755', tallocPath]);
           _appendLog('✅ libtalloc.so.2 ready from native libs');
         } else {
-          _appendLog('⚠️ libtalloc.so.2 not found, may cause issues');
+          _appendLog('⚠️ libtalloc.so.2 not found in native libs');
         }
 
         if (_cloudflaredPath.isNotEmpty) {
@@ -131,7 +132,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     try {
       final dir = await getApplicationDocumentsDirectory();
 
-      // Cloudflared
       final String cfPath = '${dir.path}/cloudflared';
       if (!File(cfPath).existsSync()) {
         final data = await rootBundle.load('assets/cloudflared');
@@ -140,7 +140,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
       _cloudflaredPath = cfPath;
 
-      // Proot
       final String prPath = '${dir.path}/proot';
       if (!File(prPath).existsSync()) {
         final data = await rootBundle.load('assets/proot');
@@ -149,7 +148,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
       _prootPath = prPath;
 
-      // Proot loader
       final String loaderPath = '${dir.path}/proot_loader';
       if (!File(loaderPath).existsSync()) {
         final data = await rootBundle.load('assets/proot_loader');
@@ -157,6 +155,18 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         await Process.run('chmod', ['755', loaderPath]);
       }
       _prootLoaderPath = loaderPath;
+
+      // Kiểm tra libtalloc trong fallback
+      final String tallocPath = '${dir.path}/libtalloc.so.2';
+      if (!File(tallocPath).existsSync()) {
+        try {
+          final data = await rootBundle.load('assets/libtalloc.so.2');
+          await File(tallocPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
+          await Process.run('chmod', ['755', tallocPath]);
+        } catch (e) {
+          _appendLog('⚠️ libtalloc.so.2 not found in assets');
+        }
+      }
 
       setState(() => _binaryReady = true);
       _appendLog('✅ Cloudflared ready (fallback)');
@@ -271,7 +281,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _appendLog('⚠️ Proot not available, running directly');
       }
 
-      // 👇 QUAN TRỌNG: Set LD_LIBRARY_PATH để tìm libtalloc.so.2
+      // 👇 QUAN TRỌNG: Set LD_LIBRARY_PATH bao gồm thư mục native libs
       final String ldLibraryPath = _nativeDir.isNotEmpty
           ? '$_nativeDir:/system/lib64:/vendor/lib64'
           : '/system/lib64:/vendor/lib64';
@@ -279,7 +289,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       final Map<String, String> env = {
         'PATH': '/system/bin:/system/xbin:/vendor/bin:/data/local/tmp',
         'ANDROID_ROOT': '/system',
-        'LD_LIBRARY_PATH': ldLibraryPath, // 👈 Đường dẫn đến libtalloc.so.2
+        'LD_LIBRARY_PATH': ldLibraryPath,
         'PROOT_TMP_DIR': '/data/local/tmp',
         'PROOT_NO_SECCOMP': '1',
         if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
