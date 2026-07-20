@@ -23,3 +23,5 @@ flutter:
     - assets/cloudflared
     - assets/proot
     - assets/proot_loader
+    - assets/libtalloc.so
+    - assets/libandroid-shmem.so
