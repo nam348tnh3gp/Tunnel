@@ -68,11 +68,13 @@ jobs:
           mkdir -p output
           
           # Chạy Docker Termux và mount volume
+          # Sử dụng --privileged để tránh lỗi personality() trên ARM containers[reference:2]
           docker run --rm \
+            --privileged \
             -v $(pwd):/workspace \
             -v $(pwd)/output:/output \
             -w /workspace \
-            termux/termux-docker \
+            termux/termux-docker:aarch64 \
             /bin/bash -c "/workspace/build-proot.sh"
           
           # Kiểm tra output
@@ -114,17 +116,17 @@ jobs:
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
 
       # ============================================================
-      # CẤU HÌNH ANDROID (Manifest, MainActivity, packaging)
+      # CẤU HÌNH ANDROID
       # ============================================================
 
       - name: Configure Android
         run: |
           cd tunnel_app
           
-          # packagingOptions - bắt buộc để Android giải nén .so
+          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # MainActivity.kt - cung cấp MethodChannel để lấy native lib dir
+          # MainActivity.kt
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
           cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
           package com.yourcompany.tunnel_controller
@@ -150,7 +152,7 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml - quyền INTERNET
+          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -185,7 +187,7 @@ jobs:
           </manifest>
           EOF
 
-          # Copy vào assets fallback
+          # Fallback assets
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
           cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
