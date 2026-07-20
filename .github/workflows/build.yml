@@ -24,17 +24,11 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      # ============================================================
-      # CÀI ĐẶT CÔNG CỤ
-      # ============================================================
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y patchelf binutils
 
-      # ============================================================
-      # TẢI PROOT VÀ GIẢI NÉN
-      # ============================================================
       - name: Download proot deb
         run: |
           wget -O proot.deb \
@@ -45,58 +39,35 @@ jobs:
           cp data/data/com.termux/files/usr/bin/proot output/
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
 
-      # ============================================================
-      # PHÁT HIỆN THƯ VIỆN PHỤ THUỘC
-      # ============================================================
       - name: Find dependencies
         run: |
           echo "=== Dependencies of proot ==="
           readelf -d output/proot | grep NEEDED
 
-      # ============================================================
-      # TẢI CÁC GÓI THƯ VIỆN
-      # ============================================================
       - name: Download dependency packages
         run: |
           mkdir -p libs_output
-          
-          # Tải libtalloc
           wget -O libtalloc.deb \
             https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
-          
-          # Tải libandroid-shmem
           wget -O libandroid-shmem.deb \
             https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb
-          
-          # Giải nén tất cả .deb
           for deb in *.deb; do
             ar x $deb
             tar -xvf data.tar.xz
           done
-          
-          # Tìm tất cả .so và copy vào libs_output
           find data -name "*.so*" -exec cp {} libs_output/ \;
-          
           echo "=== Libraries collected ==="
           ls -la libs_output/
 
-      # ============================================================
-      # SỬA TÊN FILE .so VÀ SỬA NEEDED CỦA PROOT
-      # ============================================================
       - name: Fix library names and proot dependencies
         run: |
-          # Đổi tên .so.2, .so.0 -> .so
           for lib in libs_output/*.so*; do
             if [[ $lib == *.so.* ]]; then
               newname=$(echo $lib | sed 's/\.[0-9]*$//')
               mv $lib $newname
             fi
           done
-          
-          # Copy các .so vào output
           cp libs_output/*.so output/ 2>/dev/null || true
-          
-          # Sửa NEEDED của proot
           cd output
           if readelf -d proot | grep -q "libtalloc.so.2"; then
             patchelf --replace-needed libtalloc.so.2 libtalloc.so proot
@@ -104,6 +75,15 @@ jobs:
           echo "=== Fixed proot dependencies ==="
           readelf -d proot | grep NEEDED
           ls -la
+
+      # ============================================================
+      # TẢI ALPINE ROOTFS CHO BOOTSTRAP
+      # ============================================================
+      - name: Download Alpine rootfs
+        run: |
+          mkdir -p tunnel_app/assets
+          wget -O tunnel_app/assets/alpine-rootfs.tar.gz \
+            https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/aarch64/alpine-minirootfs-3.21.3-aarch64.tar.gz
 
       # ============================================================
       # TẠO FLUTTER PROJECT
@@ -118,56 +98,39 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      # ============================================================
-      # ĐÓNG GÓI BINARY VÀO JNILIBS VÀ ASSETS
-      # ============================================================
       - name: Package binaries into APK and assets
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
           mkdir -p assets
           
-          # Copy proot và loader vào jniLibs
           cp ../output/proot android/app/src/main/jniLibs/arm64-v8a/libproot.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
-          
-          # Copy thư viện phụ thuộc vào jniLibs
           cp ../output/*.so android/app/src/main/jniLibs/arm64-v8a/ 2>/dev/null || true
           chmod +x android/app/src/main/jniLibs/arm64-v8a/*.so 2>/dev/null || true
           
-          # Copy vào assets (để fallback, tránh lỗi pubspec)
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared 2>/dev/null || true
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot 2>/dev/null || true
           cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader 2>/dev/null || true
           cp android/app/src/main/jniLibs/arm64-v8a/libtalloc.so assets/libtalloc.so 2>/dev/null || true
           cp android/app/src/main/jniLibs/arm64-v8a/libandroid-shmem.so assets/libandroid-shmem.so 2>/dev/null || true
+          cp android/app/src/main/jniLibs/arm64-v8a/alpine-rootfs.tar.gz assets/alpine-rootfs.tar.gz 2>/dev/null || true
           chmod +x assets/* 2>/dev/null || true
-          
-          echo "=== Assets after copy ==="
-          ls -la assets/
 
-      # ============================================================
-      # TẢI CLOUDFLARED
-      # ============================================================
       - name: Download cloudflared binary
         run: |
           cd tunnel_app
           wget -O android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
-          # Cũng copy vào assets
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           chmod +x assets/cloudflared
 
-      # ============================================================
-      # CẤU HÌNH ANDROID (MainActivity, Manifest với đầy đủ quyền)
-      # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
-          
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
           mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
@@ -199,19 +162,13 @@ jobs:
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.yourcompany.tunnel_controller">
-              <!-- Quyền mạng -->
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-
-              <!-- Quyền lưu trữ -->
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
               <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-
-              <!-- Quyền thông báo (Android 13+) -->
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
@@ -241,10 +198,7 @@ jobs:
           </manifest>
           EOF
 
-      # ============================================================
-      # BUILD APK CHỈ CHO ARM64
-      # ============================================================
-      - name: Build APK (ARM64 only)
+      - name: Build APK
         run: |
           cd tunnel_app
           flutter build apk --release --target-platform android-arm64
