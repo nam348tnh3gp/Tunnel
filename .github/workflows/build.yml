@@ -25,44 +25,30 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # CÀI PYTHON 2 ĐỂ BUILD PROOT (waf yêu cầu Python 2)
+      # TẢI PROOT + LOADER TỪ TERMUX REPOSITORY (.deb)
       # ============================================================
       
-      - name: Install Python 2
+      - name: Download proot and loader from Termux repository
         run: |
-          sudo apt-get update
-          sudo apt-get install -y python2
-          # Tạo symlink để python trỏ đến python2
-          sudo ln -sf /usr/bin/python2 /usr/local/bin/python
-          # Kiểm tra
-          python --version
-
-      # ============================================================
-      # BUILD PROOT + LOADER BẰNG build-proot-android
-      # ============================================================
-      
-      - name: Build proot and loader using build-proot-android
-        run: |
-          # Clone công cụ build của cộng đồng
-          git clone https://github.com/green-green-avk/build-proot-android
-          cd build-proot-android
+          # Tải gói proot cho aarch64 từ Termux main repository
+          # Phiên bản mới nhất có thể thay đổi, xem tại:
+          # https://packages.termux.dev/apt/termux-main/pool/main/p/proot/
+          wget -O proot.deb \
+            https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.105-1_aarch64.deb
           
-          # Cấu hình chỉ build cho ARM64 (aarch64)
-          sed -i 's/^ARCHS=.*/ARCHS="aarch64"/' config
-          
-          # Chạy script build với Python 2
-          # Đảm bảo PATH có python2
-          export PATH=/usr/local/bin:$PATH
-          ./build.sh
+          # Giải nén .deb (ar + tar)
+          ar x proot.deb
+          tar -xvf data.tar.xz
           
           # Tạo thư mục output và copy file
-          mkdir -p ../output
-          cp build/root-aarch64/root/bin/proot ../output/
-          cp build/root-aarch64/root/libexec/proot/loader ../output/loader.elf
+          mkdir -p output
+          cp data/data/com.termux/files/usr/bin/proot output/
+          cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
           
-          cd ..
-          echo "=== Build completed ==="
+          # Kiểm tra
+          echo "=== Files extracted ==="
           ls -la output/
+          file output/proot output/loader.elf
 
       # ============================================================
       # TẠO FLUTTER PROJECT & ĐÓNG GÓI BINARY
