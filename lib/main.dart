@@ -29,6 +29,8 @@ class TunnelControlPage extends StatefulWidget {
 class _TunnelControlPageState extends State<TunnelControlPage> {
   final TextEditingController _tokenController = TextEditingController();
   final TextEditingController _portController = TextEditingController(text: '8080');
+  final TextEditingController _customCommandController = TextEditingController(); // 👈 Ô nhập lệnh tùy chỉnh
+
   bool _useTryMode = false;
   bool _isRunning = false;
   bool _permissionsGranted = false;
@@ -63,6 +65,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _stopTunnel();
     _systemTimer?.cancel();
     _logScrollController.dispose();
+    _customCommandController.dispose();
     super.dispose();
   }
 
@@ -268,6 +271,98 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
+  // -------------------- CUSTOM COMMAND EXECUTION --------------------
+  Future<void> _executeCustomCommand() async {
+    String command = _customCommandController.text.trim();
+    if (command.isEmpty) {
+      _appendLog('⚠️ Please enter a command');
+      return;
+    }
+
+    if (!_binaryReady) {
+      _appendLog('⏳ Binary not ready yet, please wait...');
+      return;
+    }
+
+    _appendLog('▶️ Executing: $command');
+
+    try {
+      // Lấy thư mục cache và tạo /tmp
+      final cacheDir = await getTemporaryDirectory();
+      final tmpDir = cacheDir.path;
+      final tmpFolder = Directory('$tmpDir/tmp');
+      if (!await tmpFolder.exists()) {
+        await tmpFolder.create(recursive: true);
+      }
+      await Process.run('chmod', ['777', tmpFolder.path]);
+
+      // Tạo resolv.conf giả (nếu cần)
+      final resolvFile = File('$tmpDir/resolv.conf');
+      if (!await resolvFile.exists()) {
+        await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
+      }
+
+      final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
+      final bool hasLoader = _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync();
+
+      String cmd;
+      if (hasProot && hasLoader) {
+        final String nativeDir = _nativeDir;
+        cmd = '$_prootPath '
+            '-b ${resolvFile.path}:/etc/resolv.conf '
+            '-b $nativeDir:$nativeDir '
+            '-b /system:/system '
+            '-b /vendor:/vendor '
+            '-b /proc:/proc '
+            '-b /dev:/dev '
+            '-b ${tmpFolder.path}:/tmp '
+            '-w $nativeDir '
+            '/bin/sh -c "$command"';
+        _appendLog('🛡️ Executing custom command inside proot');
+      } else if (hasProot) {
+        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -b ${tmpFolder.path}:/tmp -w $_nativeDir /bin/sh -c "$command"';
+        _appendLog('⚠️ Proot without loader');
+      } else {
+        cmd = '/system/bin/sh -c "$command"';
+        _appendLog('⚠️ Proot not available, running directly');
+      }
+
+      final String ldLibraryPath = _nativeDir.isNotEmpty
+          ? '$_nativeDir:/system/lib64:/vendor/lib64'
+          : '/system/lib64:/vendor/lib64';
+
+      final Map<String, String> env = {
+        'PATH': '/system/bin:/system/xbin:/vendor/bin',
+        'ANDROID_ROOT': '/system',
+        'LD_LIBRARY_PATH': ldLibraryPath,
+        'PROOT_TMP_DIR': '/tmp',
+        'PROOT_NO_SECCOMP': '1',
+        if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
+        'TMPDIR': '/tmp',
+        'PROOT_FORCE_GLIBC': '1',
+        'PROOT_IGNORE_MISSING_LOADER': '1',
+      };
+
+      final result = await Process.run(
+        '/system/bin/sh',
+        ['-c', cmd],
+        runInShell: false,
+        environment: env,
+      );
+
+      if (result.stdout.toString().isNotEmpty) {
+        _appendLog('[OUT] ${result.stdout}');
+      }
+      if (result.stderr.toString().isNotEmpty) {
+        _appendLog('[ERR] ${result.stderr}');
+      }
+      _appendLog('✅ Command finished with exit code: ${result.exitCode}');
+    } catch (e) {
+      _appendLog('❌ Error executing command: $e');
+    }
+  }
+
+  // -------------------- TUNNEL CONTROL --------------------
   void _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready');
@@ -295,19 +390,23 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      // 👇 Lấy thư mục cache của ứng dụng (thay thế /tmp)
+      // Lấy thư mục cache của ứng dụng (thay thế /tmp)
       final cacheDir = await getTemporaryDirectory();
-      final tmpDir = cacheDir.path; // /data/user/0/com.yourcompany.tunnel_controller/cache
+      final tmpDir = cacheDir.path;
 
-      // Tạo resolv.conf giả trong cache dir
+      // Tạo thư mục /tmp trong cache
+      final tmpFolder = Directory('$tmpDir/tmp');
+      if (!await tmpFolder.exists()) {
+        await tmpFolder.create(recursive: true);
+      }
+      await Process.run('chmod', ['777', tmpFolder.path]);
+
+      // Tạo resolv.conf giả
       final resolvFile = File('$tmpDir/resolv.conf');
       await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
 
-      // Đảm bảo thư mục cache tồn tại và có quyền ghi
-      await Directory(tmpDir).create(recursive: true);
-      await Process.run('chmod', ['777', tmpDir]);
-
-      _appendLog('📁 Cache dir (as /tmp): $tmpDir');
+      _appendLog('📁 Cache dir: $tmpDir');
+      _appendLog('📁 /tmp mapped to: ${tmpFolder.path}');
 
       String cmd;
       final bool hasProot = _prootPath.isNotEmpty && File(_prootPath).existsSync();
@@ -316,7 +415,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       if (hasProot && hasLoader) {
         final String nativeDir = _nativeDir;
 
-        // 👇 GIẢI PHÁP CHÍNH: Bind mount cache dir vào /tmp (giống Termux)
         cmd = '$_prootPath '
             '-b ${resolvFile.path}:/etc/resolv.conf '
             '-b $nativeDir:$nativeDir '
@@ -324,12 +422,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             '-b /vendor:/vendor '
             '-b /proc:/proc '
             '-b /dev:/dev '
-            '-b $tmpDir:/tmp '           // 👈 Bind mount cache vào /tmp
-            '-w $nativeDir '             // 👈 Working directory = thư mục native
+            '-b ${tmpFolder.path}:/tmp '
+            '-w $nativeDir '
             './libcloudflared.so ${args.join(' ')}';
         _appendLog('🛡️ Using proot with /tmp bind mount (Termux-style)');
       } else if (hasProot) {
-        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -b $tmpDir:/tmp -w $_nativeDir ./libcloudflared.so ${args.join(' ')}';
+        cmd = '$_prootPath -b ${resolvFile.path}:/etc/resolv.conf -b ${tmpFolder.path}:/tmp -w $_nativeDir ./libcloudflared.so ${args.join(' ')}';
         _appendLog('⚠️ Proot without loader');
       } else {
         cmd = '$_cloudflaredPath ${args.join(' ')}';
@@ -344,17 +442,15 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         'PATH': '/system/bin:/system/xbin:/vendor/bin',
         'ANDROID_ROOT': '/system',
         'LD_LIBRARY_PATH': ldLibraryPath,
-        'PROOT_TMP_DIR': '/tmp',         // 👈 Trỏ đến /tmp đã được bind mount
+        'PROOT_TMP_DIR': '/tmp',
         'PROOT_NO_SECCOMP': '1',
         if (hasLoader) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
-        // 👇 Quan trọng: Termux dùng TMPDIR cho các chương trình con
         'TMPDIR': '/tmp',
-        // Các biến môi trường proot thường dùng
         'PROOT_FORCE_GLIBC': '1',
         'PROOT_IGNORE_MISSING_LOADER': '1',
       };
 
-      _appendLog('📁 PROOT_TMP_DIR: /tmp (mapped to $tmpDir)');
+      _appendLog('📁 PROOT_TMP_DIR: /tmp (mapped to ${tmpFolder.path})');
       _appendLog('📁 LD_LIBRARY_PATH: $ldLibraryPath');
 
       _process = await Process.start(
@@ -433,6 +529,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // --- Mode và Port ---
             DropdownButtonFormField<bool>(
               value: _useTryMode,
               items: const [
@@ -491,6 +588,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             ),
             const SizedBox(height: 12),
 
+            // --- CPU & Temp ---
             Row(
               children: [
                 Icon(Icons.memory, size: 18),
@@ -502,8 +600,55 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                 Text(_tempInfo),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
 
+            // --- Custom Command Execution ---
+            Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '💻 Custom Command (shell)',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _customCommandController,
+                          decoration: const InputDecoration(
+                            hintText: 'e.g. ls -la, ps aux, curl ifconfig.me',
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          ),
+                          style: const TextStyle(fontSize: 13),
+                          onSubmitted: (_) => _executeCustomCommand(),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: _executeCustomCommand,
+                        icon: const Icon(Icons.play_arrow, size: 16),
+                        label: const Text('Run'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blueGrey,
+                          minimumSize: const Size(60, 40),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // --- Log ---
             Row(
               children: [
                 const Text('📋 Log:', style: TextStyle(fontWeight: FontWeight.bold)),
