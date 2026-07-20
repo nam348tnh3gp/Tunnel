@@ -26,15 +26,15 @@ jobs:
 
       # ============================================================
       # TẢI PROOT + LOADER TỪ TERMUX REPOSITORY (.deb)
+      # Link chuẩn cho aarch64: 
+      # https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.85_aarch64.deb
       # ============================================================
       
       - name: Download proot and loader from Termux repository
         run: |
           # Tải gói proot cho aarch64 từ Termux main repository
-          # Phiên bản mới nhất có thể thay đổi, xem tại:
-          # https://packages.termux.dev/apt/termux-main/pool/main/p/proot/
           wget -O proot.deb \
-            https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.105-1_aarch64.deb
+            https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.85_aarch64.deb
           
           # Giải nén .deb (ar + tar)
           ar x proot.deb
