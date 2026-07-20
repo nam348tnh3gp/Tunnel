@@ -25,30 +25,41 @@ jobs:
           channel: 'stable'
 
       # ============================================================
-      # TẢI PROOT + LOADER TỪ TERMUX REPOSITORY (.deb)
-      # Link chuẩn cho aarch64: 
-      # https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.85_aarch64.deb
+      # TẢI PROOT + LOADER + LIBTALLOC TỪ TERMUX REPOSITORY
       # ============================================================
       
-      - name: Download proot and loader from Termux repository
+      - name: Download proot, loader and libtalloc from Termux
         run: |
-          # Tải gói proot cho aarch64 từ Termux main repository
+          # Tải proot
           wget -O proot.deb \
             https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.85_aarch64.deb
           
-          # Giải nén .deb (ar + tar)
+          # Tải libtalloc (thư viện còn thiếu)
+          wget -O libtalloc.deb \
+            https://mirror.bouwhuis.network/termux/apt/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb
+          
+          # Giải nén proot.deb
           ar x proot.deb
           tar -xvf data.tar.xz
           
-          # Tạo thư mục output và copy file
+          # Giải nén libtalloc.deb
+          ar x libtalloc.deb
+          tar -xvf data.tar.xz
+          
+          # Tạo thư mục output
           mkdir -p output
+          
+          # Copy proot và loader
           cp data/data/com.termux/files/usr/bin/proot output/
           cp data/data/com.termux/files/usr/libexec/proot/loader output/loader.elf
+          
+          # Copy libtalloc.so.2 (quan trọng!)
+          cp data/data/com.termux/files/usr/lib/libtalloc.so.2 output/
           
           # Kiểm tra
           echo "=== Files extracted ==="
           ls -la output/
-          file output/proot output/loader.elf
+          file output/*
 
       # ============================================================
       # TẠO FLUTTER PROJECT & ĐÓNG GÓI BINARY
@@ -64,7 +75,7 @@ jobs:
           cd tunnel_app
           flutter pub get
 
-      - name: Package proot and loader into APK
+      - name: Package binaries into APK
         run: |
           cd tunnel_app
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
@@ -76,6 +87,10 @@ jobs:
           # Proot loader
           cp ../output/loader.elf android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so
+          
+          # libtalloc.so.2 (thư viện cần thiết)
+          cp ../output/libtalloc.so.2 android/app/src/main/jniLibs/arm64-v8a/
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libtalloc.so.2
 
       - name: Download cloudflared binary
         run: |
@@ -160,9 +175,11 @@ jobs:
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           cp android/app/src/main/jniLibs/arm64-v8a/libproot.so assets/proot
           cp android/app/src/main/jniLibs/arm64-v8a/libproot_loader.so assets/proot_loader
+          cp android/app/src/main/jniLibs/arm64-v8a/libtalloc.so.2 assets/
           chmod +x assets/cloudflared
           chmod +x assets/proot
           chmod +x assets/proot_loader
+          chmod +x assets/libtalloc.so.2
 
       - name: Build APK
         run: |
