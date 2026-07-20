@@ -34,7 +34,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   bool _useTryMode = false;
   bool _isRunning = false;
   bool _permissionsGranted = false;
-  bool _bootstrapDone = false;
 
   Process? _process;
   StreamSubscription? _stdoutSub;
@@ -43,9 +42,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _cloudflaredPath = '';
   String _prootPath = '';
   String _prootLoaderPath = '';
-  String _runInRootfsPath = '';
+  String _rootfsPath = '';
   String _nativeDir = '';
   bool _binaryReady = false;
+  bool _rootfsReady = false;
 
   String _cpuInfo = '';
   String _tempInfo = '';
@@ -58,7 +58,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.initState();
     _requestPermissions().then((_) {
       _initBinary();
-      _bootstrapTermux();
+      _initRootfs();
       _startSystemMonitor();
     });
   }
@@ -154,82 +154,40 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // ==================== BOOTSTRAP TERMUX ROOTFS ====================
-  Future<void> _bootstrapTermux() async {
+  // ==================== INIT ROOTFS (Alpine) ====================
+  Future<void> _initRootfs() async {
     try {
-      _appendLog('📦 Running Termux-style bootstrap...');
-
       final appDir = await getApplicationDocumentsDirectory();
+      final rootfsDir = Directory('${appDir.path}/alpine-rootfs');
 
-      // Kiểm tra rootfs đã tồn tại chưa
-      final rootfsDir = Directory('${appDir.path}/rootfs');
-      final runScript = File('${appDir.path}/run-in-rootfs.sh');
+      if (!await rootfsDir.exists()) {
+        _appendLog('📦 Extracting Alpine rootfs...');
+        await rootfsDir.create(recursive: true);
 
-      if (await rootfsDir.exists() && await runScript.exists()) {
-        _runInRootfsPath = runScript.path;
-        _bootstrapDone = true;
-        _appendLog('✅ Rootfs already exists, skipping bootstrap');
-        return;
-      }
+        final assetData = await rootBundle.load('assets/alpine-rootfs.tar.gz');
+        final tempFile = File('${appDir.path}/rootfs.tar.gz');
+        await tempFile.writeAsBytes(assetData.buffer.asUint8List());
 
-      // Giải nén bootstrap script từ assets
-      final bootstrapData = await rootBundle.loadString('assets/bootstrap.sh');
-      final bootstrapFile = File('${appDir.path}/bootstrap.sh');
-      await bootstrapFile.writeAsString(bootstrapData);
-      await Process.run('chmod', ['755', bootstrapFile.path]);
-
-      // Copy binary và thư viện vào thư mục files để script dùng
-      final files = {
-        'proot': _prootPath,
-        'proot_loader': _prootLoaderPath,
-        'libtalloc.so': '$_nativeDir/libtalloc.so',
-        'libandroid-shmem.so': '$_nativeDir/libandroid-shmem.so',
-      };
-
-      for (var entry in files.entries) {
-        final src = entry.value;
-        final dest = '${appDir.path}/${entry.key}';
-        if (File(src).existsSync()) {
-          await File(src).copy(dest);
-          await Process.run('chmod', ['755', dest]);
-          _appendLog('✅ Copied ${entry.key}');
-        } else {
-          _appendLog('⚠️ ${entry.key} not found at $src');
+        final result = await Process.run('tar', [
+          '-xzf',
+          tempFile.path,
+          '-C',
+          rootfsDir.path,
+          '--no-same-owner',
+        ]);
+        if (result.exitCode != 0) {
+          _appendLog('❌ Extract failed: ${result.stderr}');
+          return;
         }
+        await tempFile.delete();
+        _appendLog('✅ Alpine rootfs extracted to ${rootfsDir.path}');
       }
 
-      // Copy cloudflared vào thư mục files
-      if (File(_cloudflaredPath).existsSync()) {
-        await File(_cloudflaredPath).copy('${appDir.path}/cloudflared');
-        await Process.run('chmod', ['755', '${appDir.path}/cloudflared']);
-        _appendLog('✅ Copied cloudflared');
-      }
-
-      // Chạy bootstrap script
-      final result = await Process.run(
-        '/system/bin/sh',
-        [bootstrapFile.path],
-        runInShell: false,
-      );
-
-      if (result.stdout.toString().isNotEmpty) {
-        _appendLog('[BOOTSTRAP] ${result.stdout}');
-      }
-      if (result.stderr.toString().isNotEmpty) {
-        _appendLog('[BOOTSTRAP ERR] ${result.stderr}');
-      }
-
-      // Kiểm tra script run-in-rootfs đã được tạo
-      if (await runScript.exists()) {
-        _runInRootfsPath = runScript.path;
-        await Process.run('chmod', ['755', _runInRootfsPath]);
-        _bootstrapDone = true;
-        _appendLog('✅ Bootstrap completed successfully!');
-      } else {
-        _appendLog('❌ Bootstrap failed: run-in-rootfs.sh not found');
-      }
+      _rootfsPath = rootfsDir.path;
+      setState(() => _rootfsReady = true);
+      _appendLog('✅ Rootfs ready: $_rootfsPath');
     } catch (e) {
-      _appendLog('❌ Bootstrap error: $e');
+      _appendLog('❌ Rootfs init error: $e');
     }
   }
 
@@ -290,41 +248,49 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // ==================== EXECUTE COMMAND IN ROOTFS ====================
-  Future<void> _executeInRootfs(String command) async {
-    if (!_bootstrapDone || _runInRootfsPath.isEmpty) {
-      _appendLog('⏳ Rootfs not ready');
-      return;
+  // ==================== BUILD PROOT COMMAND ====================
+  Future<String> _buildProotCommand(String command) async {
+    if (_prootPath.isEmpty || _rootfsPath.isEmpty) {
+      return '';
     }
 
-    try {
-      // Escape command để truyền qua shell
-      final escapedCommand = command.replaceAll('"', '\\"');
-      final cmd = '$_runInRootfsPath "$escapedCommand"';
-
-      _appendLog('▶️ Executing in rootfs: $command');
-
-      final result = await Process.run(
-        '/system/bin/sh',
-        ['-c', cmd],
-        runInShell: false,
-      );
-
-      if (result.stdout.toString().isNotEmpty) {
-        _appendLog('[OUT] ${result.stdout}');
-      }
-      if (result.stderr.toString().isNotEmpty) {
-        _appendLog('[ERR] ${result.stderr}');
-      }
-      _appendLog('✅ Command finished with exit code: ${result.exitCode}');
-    } catch (e) {
-      _appendLog('❌ Error executing command: $e');
+    final cacheDir = await getTemporaryDirectory();
+    final tmpDir = cacheDir.path;
+    final tmpFolder = Directory('$tmpDir/tmp');
+    if (!await tmpFolder.exists()) {
+      await tmpFolder.create(recursive: true);
     }
+    await Process.run('chmod', ['777', tmpFolder.path]);
+
+    final resolvFile = File('$tmpDir/resolv.conf');
+    await resolvFile.writeAsString('nameserver 1.1.1.1\nnameserver 8.8.8.8\n');
+
+    final hasLoader = _prootLoaderPath.isNotEmpty && File(_prootLoaderPath).existsSync();
+
+    String cmd = '$_prootPath '
+        '-b ${resolvFile.path}:/etc/resolv.conf '
+        '-b $_rootfsPath:$_rootfsPath '
+        '-b $_nativeDir:$_nativeDir '
+        '-b /system:/system '
+        '-b /vendor:/vendor '
+        '-b /proc:/proc '
+        '-b /dev:/dev '
+        '-b ${tmpFolder.path}:/tmp '
+        '-w $_rootfsPath '
+        '/bin/sh -c "'
+        'export PATH=/usr/bin:/bin:/system/bin:/system/xbin:/vendor/bin; '
+        'export LD_LIBRARY_PATH=$_nativeDir:/system/lib64:/vendor/lib64; '
+        'export PROOT_TMP_DIR=/tmp; '
+        'export TMPDIR=/tmp; '
+        'cd $_nativeDir; '
+        '$command"';
+
+    return cmd;
   }
 
   // ==================== START TUNNEL ====================
   void _startTunnel() async {
-    if (!_binaryReady || !_bootstrapDone) {
+    if (!_binaryReady || !_rootfsReady) {
       _appendLog('⏳ Binary or rootfs not ready');
       return;
     }
@@ -350,22 +316,34 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     try {
-      // Chạy cloudflared bên trong rootfs
-      final command = 'cd $_nativeDir && ./cloudflared $args';
-      final escapedCommand = command.replaceAll('"', '\\"');
-      final cmd = '$_runInRootfsPath "$escapedCommand"';
+      final command = './libcloudflared.so $args';
+      final cmd = await _buildProotCommand(command);
 
-      _appendLog('🛡️ Running tunnel inside Termux rootfs');
+      if (cmd.isEmpty) {
+        _appendLog('❌ Cannot build proot command');
+        return;
+      }
+
+      final Map<String, String> env = {
+        'PATH': '/usr/bin:/bin:/system/bin:/system/xbin:/vendor/bin',
+        'ANDROID_ROOT': '/system',
+        'LD_LIBRARY_PATH': '$_nativeDir:/system/lib64:/vendor/lib64',
+        'PROOT_TMP_DIR': '/tmp',
+        'PROOT_NO_SECCOMP': '1',
+        if (_prootLoaderPath.isNotEmpty) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
+        'TMPDIR': '/tmp',
+        'HOME': '/root',
+        'TERM': 'xterm-256color',
+      };
+
+      _appendLog('🛡️ Using Alpine rootfs via proot');
+      _appendLog('📁 Rootfs: $_rootfsPath');
 
       _process = await Process.start(
         '/system/bin/sh',
         ['-c', cmd],
         runInShell: false,
-        environment: {
-          'PATH': '/usr/bin:/bin:/system/bin:/system/xbin:/vendor/bin',
-          'ANDROID_ROOT': '/system',
-          'TMPDIR': '/data/local/tmp',
-        },
+        environment: env,
       );
 
       _isRunning = true;
@@ -418,7 +396,49 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       _appendLog('⚠️ Please enter a command');
       return;
     }
-    await _executeInRootfs(command);
+    if (!_binaryReady || !_rootfsReady) {
+      _appendLog('⏳ Binary or rootfs not ready');
+      return;
+    }
+
+    _appendLog('▶️ Executing: $command');
+
+    try {
+      final cmd = await _buildProotCommand(command);
+      if (cmd.isEmpty) {
+        _appendLog('❌ Cannot build command');
+        return;
+      }
+
+      final Map<String, String> env = {
+        'PATH': '/usr/bin:/bin:/system/bin:/system/xbin:/vendor/bin',
+        'ANDROID_ROOT': '/system',
+        'LD_LIBRARY_PATH': '$_nativeDir:/system/lib64:/vendor/lib64',
+        'PROOT_TMP_DIR': '/tmp',
+        'PROOT_NO_SECCOMP': '1',
+        if (_prootLoaderPath.isNotEmpty) 'PROOT_UNBUNDLE_LOADER': _prootLoaderPath,
+        'TMPDIR': '/tmp',
+        'HOME': '/root',
+        'TERM': 'xterm-256color',
+      };
+
+      final result = await Process.run(
+        '/system/bin/sh',
+        ['-c', cmd],
+        runInShell: false,
+        environment: env,
+      );
+
+      if (result.stdout.toString().isNotEmpty) {
+        _appendLog('[OUT] ${result.stdout}');
+      }
+      if (result.stderr.toString().isNotEmpty) {
+        _appendLog('[ERR] ${result.stderr}');
+      }
+      _appendLog('✅ Command finished with exit code: ${result.exitCode}');
+    } catch (e) {
+      _appendLog('❌ Error executing command: $e');
+    }
   }
 
   // ==================== UI ====================
@@ -527,7 +547,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    '💻 Custom Command (in rootfs)',
+                    '💻 Custom Command (Alpine shell)',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   ),
                   const SizedBox(height: 4),
