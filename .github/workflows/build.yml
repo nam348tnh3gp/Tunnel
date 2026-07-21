@@ -18,34 +18,27 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      # 👇 NÂNG CẤP FLUTTER LÊN 3.38.0 để dùng flutter_foreground_task 10.0.0
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.0'   # Đã sửa
+          flutter-version: '3.38.0'
           channel: 'stable'
-
-      # ============================================================
-      # CÀI ĐẶT QEMU CHO ARM64
-      # ============================================================
-      - name: Setup QEMU for ARM64
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-user-static binfmt-support
-          sudo update-binfmts --enable qemu-arm
 
       # ============================================================
       # CÀI ĐẶT ANDROID NDK
       # ============================================================
       - name: Setup Android NDK
         run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-arm
           wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
           unzip -q android-ndk-r26c-linux.zip
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
           echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
       # ============================================================
-      # BUILD CLOUDFLARED CHO TẤT CẢ KIẾN TRÚC (CGO_ENABLED=1)
+      # BUILD CLOUDFLARED CHO TẤT CẢ KIẾN TRÚC
       # ============================================================
       - name: Build cloudflared for all architectures
         run: |
@@ -53,7 +46,6 @@ jobs:
           cd cloudflared
           mkdir -p ../output
 
-          # Hàm build cho từng kiến trúc
           build_arch() {
             local arch=$1
             local clang_target=$2
@@ -75,13 +67,13 @@ jobs:
           chmod +x ../output/*
 
       # ============================================================
-      # TẠO FLUTTER PROJECT (GIỮ NGUYÊN ANDROID FOLDER)
+      # TẠO FLUTTER PROJECT (CÓ CHỈ ĐỊNH PLATFORM ANDROID)
       # ============================================================
       - name: Create Flutter project
         run: |
-          flutter create --org com.TGFN --project-name tunnel_controller tunnel_app
+          flutter create --org com.TGFN --project-name tunnel_controller --platforms=android tunnel_app
           cd tunnel_app
-          # Chỉ xóa lib, pubspec.yaml, assets - KHÔNG xóa android
+          # Xóa lib, pubspec.yaml, assets để thay bằng code của bạn
           rm -rf lib pubspec.yaml assets
           cp -r ../lib .
           cp ../pubspec.yaml .
@@ -89,28 +81,62 @@ jobs:
           flutter pub get
 
       # ============================================================
-      # CẤU HÌNH GRADLE (minSdk, targetSdk, Kotlin, Gradle)
+      # CẤU HÌNH GRADLE (HỖ TRỢ CẢ .gradle VÀ .gradle.kts)
       # ============================================================
       - name: Configure Gradle
         run: |
           cd tunnel_app
           
-          # Cập nhật minSdkVersion lên 21, targetSdkVersion lên 35
-          sed -i 's/minSdkVersion [0-9]*/minSdkVersion 21/g' android/app/build.gradle
-          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 35/g' android/app/build.gradle
-          sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 35/g' android/app/build.gradle
-
-          # packagingOptions
-          sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
-
-          # Kotlin version 1.9.10
-          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.10"/g' android/build.gradle
-
-          # Gradle 8.6
-          sed -i 's/distributionUrl=.*/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.6-bin.zip/g' android/gradle/wrapper/gradle-wrapper.properties
+          echo "📁 Kiểm tra cấu trúc thư mục android..."
+          find android -type f -name "*.gradle*" | head -20
+          
+          # Tìm file build.gradle hoặc build.gradle.kts
+          if [ -f "android/app/build.gradle" ]; then
+            GRADLE_FILE="android/app/build.gradle"
+            echo "✅ Tìm thấy build.gradle"
+          elif [ -f "android/app/build.gradle.kts" ]; then
+            GRADLE_FILE="android/app/build.gradle.kts"
+            echo "✅ Tìm thấy build.gradle.kts"
+          else
+            echo "❌ Không tìm thấy file build.gradle nào!"
+            echo "📁 Cấu trúc android/app:"
+            ls -la android/app/ || true
+            echo "📁 Toàn bộ android:"
+            find android -type f | head -30
+            exit 1
+          fi
+          
+          echo "📝 Đang sửa file: $GRADLE_FILE"
+          
+          # Backup file gốc
+          cp "$GRADLE_FILE" "$GRADLE_FILE.bak"
+          
+          # Cập nhật minSdkVersion, targetSdkVersion, compileSdkVersion
+          sed -i 's/minSdkVersion [0-9]*/minSdkVersion 21/g' "$GRADLE_FILE"
+          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 35/g' "$GRADLE_FILE"
+          sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 35/g' "$GRADLE_FILE"
+          
+          # Thêm packagingOptions nếu chưa có
+          if ! grep -q "packagingOptions" "$GRADLE_FILE"; then
+            sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' "$GRADLE_FILE"
+          fi
+          
+          # Sửa Kotlin version (nếu có file build.gradle ở root)
+          if [ -f "android/build.gradle" ]; then
+            sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.10"/g' android/build.gradle
+            echo "✅ Đã sửa kotlin_version"
+          fi
+          
+          # Sửa Gradle version
+          if [ -f "android/gradle/wrapper/gradle-wrapper.properties" ]; then
+            sed -i 's/distributionUrl=.*/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.6-bin.zip/g' android/gradle/wrapper/gradle-wrapper.properties
+            echo "✅ Đã sửa gradle-wrapper.properties"
+          fi
+          
+          echo "✅ Cấu hình Gradle hoàn tất"
 
       # ============================================================
-      # COPY CLOUDFLARED VÀO JNILIBS (TẤT CẢ KIẾN TRÚC)
+      # COPY BINARY VÀO JNILIBS
       # ============================================================
       - name: Setup native libraries
         run: |
@@ -120,17 +146,47 @@ jobs:
           mkdir -p android/app/src/main/jniLibs/x86_64
           mkdir -p android/app/src/main/jniLibs/x86
 
-          cp ../output/cloudflared-arm64 android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
-          cp ../output/cloudflared-arm32 android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
-          cp ../output/cloudflared-x86_64 android/app/src/main/jniLibs/x86_64/libcloudflared.so
-          cp ../output/cloudflared-x86 android/app/src/main/jniLibs/x86/libcloudflared.so
+          # Copy binaries với kiểm tra file tồn tại
+          if [ -f "../output/cloudflared-arm64" ]; then
+            cp ../output/cloudflared-arm64 android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+            echo "✅ Copied arm64"
+          else
+            echo "⚠️ Không tìm thấy cloudflared-arm64"
+          fi
+          
+          if [ -f "../output/cloudflared-arm32" ]; then
+            cp ../output/cloudflared-arm32 android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
+            echo "✅ Copied arm32"
+          else
+            echo "⚠️ Không tìm thấy cloudflared-arm32"
+          fi
+          
+          if [ -f "../output/cloudflared-x86_64" ]; then
+            cp ../output/cloudflared-x86_64 android/app/src/main/jniLibs/x86_64/libcloudflared.so
+            echo "✅ Copied x86_64"
+          else
+            echo "⚠️ Không tìm thấy cloudflared-x86_64"
+          fi
+          
+          if [ -f "../output/cloudflared-x86" ]; then
+            cp ../output/cloudflared-x86 android/app/src/main/jniLibs/x86/libcloudflared.so
+            echo "✅ Copied x86"
+          else
+            echo "⚠️ Không tìm thấy cloudflared-x86"
+          fi
 
-          chmod +x android/app/src/main/jniLibs/*/*.so
-          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
-          chmod +x assets/cloudflared
+          # Set permissions
+          chmod +x android/app/src/main/jniLibs/*/*.so 2>/dev/null || true
+          
+          # Copy binary to assets
+          if [ -f "android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so" ]; then
+            cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
+            chmod +x assets/cloudflared
+            echo "✅ Copied cloudflared to assets"
+          fi
 
       # ============================================================
-      # CẤU HÌNH ANDROID (MainActivity, Manifest với foreground service)
+      # CẤU HÌNH ANDROID (MainActivity, Manifest)
       # ============================================================
       - name: Configure Android
         run: |
@@ -161,8 +217,9 @@ jobs:
               }
           }
           EOF
+          echo "✅ Created MainActivity.kt"
 
-          # AndroidManifest.xml (đã thêm quyền foreground service)
+          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -210,8 +267,9 @@ jobs:
               </application>
           </manifest>
           EOF
+          echo "✅ Created AndroidManifest.xml"
 
-          # Styles (để tránh lỗi build)
+          # Styles
           mkdir -p android/app/src/main/res/values
           cat > android/app/src/main/res/values/styles.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -240,6 +298,8 @@ jobs:
               <item android:drawable="?android:colorBackground" />
           </layer-list>
           EOF
+          
+          echo "✅ Configured Android resources"
 
       # ============================================================
       # BUILD APK
@@ -247,7 +307,7 @@ jobs:
       - name: Build APK
         run: |
           cd tunnel_app
-          flutter build apk --release
+          flutter build apk --release --no-shrink
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
