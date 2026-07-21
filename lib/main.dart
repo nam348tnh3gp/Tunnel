@@ -12,10 +12,10 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 const MethodChannel _nativeChannel = MethodChannel('com.TGFN.tunnel_controller/native');
 
 void main() {
-  // 👇 Khởi tạo communication port (quan trọng!)
+  // Bước 1: Khởi tạo port giao tiếp
   FlutterForegroundTask.initCommunicationPort();
-  
-  // Khởi tạo Foreground Service
+
+  // Bước 4: Khởi tạo service
   FlutterForegroundTask.init(
     androidNotificationOptions: AndroidNotificationOptions(
       channelId: 'tunnel_channel',
@@ -23,7 +23,6 @@ void main() {
       channelDescription: 'Keep tunnel running in background',
       channelImportance: NotificationChannelImportance.LOW,
       priority: NotificationPriority.LOW,
-      icon: null,
     ),
     iosNotificationOptions: const IOSNotificationOptions(
       showNotification: false,
@@ -55,7 +54,6 @@ class TunnelControlPage extends StatefulWidget {
 }
 
 class _TunnelControlPageState extends State<TunnelControlPage> {
-  // Basic tunnel controls
   final TextEditingController _tokenController = TextEditingController();
   final TextEditingController _portController = TextEditingController(text: '8080');
   final TextEditingController _customArgsController = TextEditingController();
@@ -63,7 +61,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   bool _isRunning = false;
   bool _permissionsGranted = false;
 
-  // Advanced options
   bool _useQuic = true;
   bool _usePostQuantum = false;
   bool _useMetrics = true;
@@ -89,10 +86,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   @override
   void initState() {
     super.initState();
-    
-    // 👇 Add callback để nhận dữ liệu từ TaskHandler
+
+    // Bước 3: Thêm callback nhận dữ liệu từ TaskHandler
     FlutterForegroundTask.addTaskDataCallback(_onReceiveTaskData);
-    
+
     _requestPermissions().then((_) {
       _initBinary();
       _startSystemMonitor();
@@ -106,32 +103,20 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _stopForegroundService();
     _systemTimer?.cancel();
     _logScrollController.dispose();
-    
-    // 👇 Remove callback khi dispose
+
+    // Bước 3: Xóa callback
     FlutterForegroundTask.removeTaskDataCallback(_onReceiveTaskData);
     super.dispose();
   }
 
-  // ==================== RECEIVE DATA FROM TASK HANDLER ====================
   void _onReceiveTaskData(Object data) {
-    if (data is Map<String, dynamic>) {
-      final dynamic cpu = data["cpu"];
-      final dynamic temp = data["temp"];
-      if (cpu != null && temp != null) {
-        setState(() {
-          _cpuInfo = 'CPU: ${cpu.toStringAsFixed(1)}%';
-          _tempInfo = '🌡️ Temp: ${temp.toStringAsFixed(1)} °C';
-        });
-      }
-    }
+    // Xử lý dữ liệu từ TaskHandler nếu cần
   }
 
-  // ==================== PERMISSIONS ====================
   Future<void> _requestPermissions() async {
     _appendLog('🔑 Requesting permissions...');
 
-    // Check notification permission (Android 13+)
-    final notificationPermission =
+    final NotificationPermission notificationPermission =
         await FlutterForegroundTask.checkNotificationPermission();
     if (notificationPermission != NotificationPermission.granted) {
       await FlutterForegroundTask.requestNotificationPermission();
@@ -155,7 +140,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       }
     }
 
-    // Android 12+, request ignore battery optimization
     if (Platform.isAndroid) {
       if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
         await FlutterForegroundTask.requestIgnoreBatteryOptimization();
@@ -166,7 +150,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _appendLog('✅ Permissions requested');
   }
 
-  // ==================== INIT BINARY ====================
   Future<void> _initBinary() async {
     try {
       String? nativeDir;
@@ -214,10 +197,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // ==================== FOREGROUND SERVICE ====================
   Future<void> _initForegroundService() async {
     try {
-      // 👇 Đăng ký callback start
       if (!await FlutterForegroundTask.isRunningService) {
         final result = await FlutterForegroundTask.startService(
           serviceId: 256,
@@ -233,18 +214,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       } else {
         _appendLog('ℹ️ Foreground service already running');
       }
-
-      // 👇 Kiểm tra xem service đang chạy không
-      final isRunning = await FlutterForegroundTask.isRunningService;
-      if (isRunning) {
-        _appendLog('✅ Service is running');
-      }
     } catch (e) {
       _appendLog('⚠️ Foreground service init: $e');
     }
   }
 
-  Future<void> _updateForegroundNotification(String text, [String? url]) async {
+  Future<void> _updateForegroundNotification(String text) async {
     try {
       await FlutterForegroundTask.updateService(
         notificationTitle: 'Tunnel Controller',
@@ -254,7 +229,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         ],
       );
     } catch (e) {
-      // Bỏ qua lỗi
+      // ignore
     }
   }
 
@@ -263,11 +238,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       await FlutterForegroundTask.stopService();
       _appendLog('ℹ️ Foreground service stopped');
     } catch (e) {
-      // Bỏ qua
+      // ignore
     }
   }
 
-  // ==================== SYSTEM MONITOR ====================
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
@@ -279,7 +253,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             _cpuInfo = 'CPU: ${cpu.toStringAsFixed(1)}%';
             _tempInfo = '🌡️ Temp: ${temp.toStringAsFixed(1)} °C';
           });
-          // Cập nhật notification với CPU/Temp
           if (_isRunning) {
             final status = _tunnelUrl.isNotEmpty
                 ? 'Running: ${_tunnelUrl.length > 30 ? _tunnelUrl.substring(0, 30) + '...' : _tunnelUrl}'
@@ -300,7 +273,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
-  // ==================== LOG HELPER ====================
   void _appendLog(String msg) {
     setState(() => _log += '\n$msg');
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -346,7 +318,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     );
   }
 
-  // ==================== START TUNNEL ====================
   void _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready');
@@ -475,7 +446,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // ==================== STOP TUNNEL ====================
   void _stopTunnel() {
     if (_process != null) {
       _process!.kill(ProcessSignal.sigterm);
@@ -490,7 +460,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // ==================== UI ====================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -511,7 +480,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Mode
               DropdownButtonFormField<bool>(
                 value: _useTryMode,
                 items: const [
@@ -526,7 +494,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 12),
 
-              // Token field
               if (!_useTryMode)
                 TextField(
                   controller: _tokenController,
@@ -537,7 +504,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                 ),
               const SizedBox(height: 12),
 
-              // Port
               TextField(
                 controller: _portController,
                 decoration: const InputDecoration(
@@ -548,7 +514,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 12),
 
-              // Custom arguments
               TextField(
                 controller: _customArgsController,
                 decoration: const InputDecoration(
@@ -558,7 +523,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 12),
 
-              // Advanced options
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey.withOpacity(0.3)),
@@ -637,7 +601,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 12),
 
-              // Start/Stop buttons
               Row(
                 children: [
                   Expanded(
@@ -665,7 +628,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 8),
 
-              // Copy URL button
               if (_tunnelUrl.isNotEmpty)
                 Container(
                   width: double.infinity,
@@ -681,7 +643,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                 ),
               const SizedBox(height: 12),
 
-              // Foreground service status
               Container(
                 padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                 decoration: BoxDecoration(
@@ -713,7 +674,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 12),
 
-              // CPU & Temp
               Row(
                 children: [
                   Icon(Icons.memory, size: 18),
@@ -727,7 +687,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 8),
 
-              // Log
               Row(
                 children: [
                   const Text('📋 Log:', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -764,8 +723,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   }
 }
 
-// ==================== TASK HANDLER ====================
-// 👇 TOP-LEVEL FUNCTION - Bắt buộc phải là top-level hoặc static
+// Bước 2: callback top-level
 @pragma('vm:entry-point')
 void startCallback() {
   FlutterForegroundTask.setTaskHandler(MyTaskHandler());
@@ -773,45 +731,27 @@ void startCallback() {
 
 class MyTaskHandler extends TaskHandler {
   @override
-  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    // Called when the task is started
-  }
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
 
   @override
-  void onRepeatEvent(DateTime timestamp) {
-    // Called based on the eventAction set in ForegroundTaskOptions
-    // Send data to main isolate (CPU/Temp)
-    // Lưu ý: Không gọi hàm async trong onRepeatEvent
-  }
+  void onRepeatEvent(DateTime timestamp) {}
 
   @override
-  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
-    // Called when the task is destroyed
-  }
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
 
   @override
-  void onReceiveData(Object data) {
-    // Called when data is sent from main isolate
-    // Không dùng trong app này
-  }
+  void onReceiveData(Object data) {}
 
   @override
   void onNotificationButtonPressed(String id) {
-    // Called when the notification button is pressed
     if (id == 'stop_tunnel') {
-      // Stop tunnel from notification
-      // Có thể gửi dữ liệu về main isolate để xử lý
+      // Xử lý stop tunnel từ notification nếu cần
     }
   }
 
   @override
-  void onNotificationPressed() {
-    // Called when the notification itself is pressed
-    // Open app
-  }
+  void onNotificationPressed() {}
 
   @override
-  void onNotificationDismissed() {
-    // Called when the notification is dismissed
-  }
+  void onNotificationDismissed() {}
 }
