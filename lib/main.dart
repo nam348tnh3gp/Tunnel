@@ -20,9 +20,17 @@ void main() {
       channelDescription: 'Keep tunnel running in background',
       channelImportance: NotificationChannelImportance.LOW,
       priority: NotificationPriority.LOW,
+      icon: null,
     ),
     iosNotificationOptions: IOSNotificationOptions(
       showNotification: false,
+    ),
+    foregroundTaskOptions: ForegroundTaskOptions(
+      interval: 2000, // 2 giây
+      autoRunOnBoot: false,
+      autoRunOnMyPackageReplaced: false,
+      allowWifiLock: false,
+      allowWakeLock: false,
     ),
   );
   runApp(MyApp());
@@ -96,7 +104,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.dispose();
   }
 
-  // ==================== PERMISSIONS (Giảm thiểu) ====================
+  // ==================== PERMISSIONS ====================
   Future<void> _requestPermissions() async {
     _appendLog('🔑 Requesting permissions...');
 
@@ -104,9 +112,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       Permission.storage,
       Permission.notification,
     ];
-
-    // Chỉ xin storage để fallback (nếu cần)
-    // Không xin phone, manageExternalStorage
 
     for (var perm in permissions) {
       final status = await perm.request();
@@ -182,7 +187,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         await Permission.notification.request();
       }
 
-      // Start foreground service (nếu chưa chạy)
+      // Đăng ký callback cho foreground task
+      FlutterForegroundTask.setTaskHandler(TunnelTaskHandler());
+
+      // Start foreground service
       if (!await FlutterForegroundTask.isRunningService) {
         await FlutterForegroundTask.startService(
           notificationTitle: 'Tunnel Controller',
@@ -191,24 +199,17 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             NotificationButton(id: 'stop_tunnel', text: 'Stop Tunnel'),
           ],
         );
-        _appendLog('✅ Foreground service initialized');
+        _appendLog('✅ Foreground service started');
       } else {
         _appendLog('ℹ️ Foreground service already running');
       }
 
       // Lắng nghe sự kiện từ notification buttons
-      FlutterForegroundTask.addTaskEventHandler(
-        onEvent: (event) {
-          if (event is NotificationButtonPressedEvent) {
-            if (event.id == 'stop_tunnel') {
-              _stopTunnel();
-            }
-          }
-        },
-        onError: (error) {
-          _appendLog('❌ Foreground service error: $error');
-        },
-      );
+      FlutterForegroundTask.onNotificationButtonPressed.listen((button) {
+        if (button.id == 'stop_tunnel') {
+          _stopTunnel();
+        }
+      });
     } catch (e) {
       _appendLog('⚠️ Foreground service init: $e');
     }
@@ -216,7 +217,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
   Future<void> _updateForegroundNotification(String text, [String? url]) async {
     try {
-      final notification = FlutterForegroundTask.updateService(
+      await FlutterForegroundTask.updateService(
         notificationTitle: 'Tunnel Controller',
         notificationText: text,
         notificationButtons: [
@@ -237,6 +238,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
+  // ==================== SYSTEM MONITOR ====================
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
@@ -730,5 +732,31 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         ),
       ),
     );
+  }
+}
+
+// ==================== FOREGROUND TASK HANDLER ====================
+class TunnelTaskHandler extends TaskHandler {
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    // Called when the foreground task starts
+  }
+
+  @override
+  Future<void> onEvent(DateTime timestamp, TaskStarter starter) async {
+    // Called every interval
+  }
+
+  @override
+  Future<void> onDestroy(DateTime timestamp, TaskStarter starter) async {
+    // Called when the task is destroyed
+  }
+
+  @override
+  void onNotificationButtonPressed(String id) {
+    if (id == 'stop_tunnel') {
+      // Stop tunnel from notification
+      // This will be handled by the main app
+    }
   }
 }
