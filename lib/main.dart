@@ -239,7 +239,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _appendLog('❌ Please enter Token');
         return;
       }
-      args.addAll(['tunnel', '--token', token]);
+      // ✅ SỬA: dùng lệnh đúng: tunnel run --token
+      args.addAll(['tunnel', 'run', '--token', token]);
       _appendLog('🔑 Starting tunnel with token');
     }
 
