@@ -9,9 +9,12 @@ import 'package:device_info_ce/device_info_ce.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-const MethodChannel _nativeChannel = MethodChannel('com.yourcompany.tunnel_controller/native');
+const MethodChannel _nativeChannel = MethodChannel('com.TGFN.tunnel_controller/native');
 
 void main() {
+  // 👇 Khởi tạo communication port (quan trọng!)
+  FlutterForegroundTask.initCommunicationPort();
+  
   // Khởi tạo Foreground Service
   FlutterForegroundTask.init(
     androidNotificationOptions: AndroidNotificationOptions(
@@ -22,15 +25,16 @@ void main() {
       priority: NotificationPriority.LOW,
       icon: null,
     ),
-    iosNotificationOptions: IOSNotificationOptions(
+    iosNotificationOptions: const IOSNotificationOptions(
       showNotification: false,
+      playSound: false,
     ),
     foregroundTaskOptions: ForegroundTaskOptions(
-      interval: 2000, // 2 giây
+      eventAction: ForegroundTaskEventAction.repeat(2000),
       autoRunOnBoot: false,
       autoRunOnMyPackageReplaced: false,
-      allowWifiLock: false,
       allowWakeLock: false,
+      allowWifiLock: false,
     ),
   );
   runApp(MyApp());
@@ -82,12 +86,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
   final ScrollController _logScrollController = ScrollController();
 
-  // Foreground service
-  bool _isForegroundRunning = false;
-
   @override
   void initState() {
     super.initState();
+    
+    // 👇 Add callback để nhận dữ liệu từ TaskHandler
+    FlutterForegroundTask.addTaskDataCallback(_onReceiveTaskData);
+    
     _requestPermissions().then((_) {
       _initBinary();
       _startSystemMonitor();
@@ -101,16 +106,39 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _stopForegroundService();
     _systemTimer?.cancel();
     _logScrollController.dispose();
+    
+    // 👇 Remove callback khi dispose
+    FlutterForegroundTask.removeTaskDataCallback(_onReceiveTaskData);
     super.dispose();
+  }
+
+  // ==================== RECEIVE DATA FROM TASK HANDLER ====================
+  void _onReceiveTaskData(Object data) {
+    if (data is Map<String, dynamic>) {
+      final dynamic cpu = data["cpu"];
+      final dynamic temp = data["temp"];
+      if (cpu != null && temp != null) {
+        setState(() {
+          _cpuInfo = 'CPU: ${cpu.toStringAsFixed(1)}%';
+          _tempInfo = '🌡️ Temp: ${temp.toStringAsFixed(1)} °C';
+        });
+      }
+    }
   }
 
   // ==================== PERMISSIONS ====================
   Future<void> _requestPermissions() async {
     _appendLog('🔑 Requesting permissions...');
 
+    // Check notification permission (Android 13+)
+    final notificationPermission =
+        await FlutterForegroundTask.checkNotificationPermission();
+    if (notificationPermission != NotificationPermission.granted) {
+      await FlutterForegroundTask.requestNotificationPermission();
+    }
+
     List<Permission> permissions = [
       Permission.storage,
-      Permission.notification,
     ];
 
     for (var perm in permissions) {
@@ -124,6 +152,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         if (await perm.shouldShowRequestRationale == false) {
           await openAppSettings();
         }
+      }
+    }
+
+    // Android 12+, request ignore battery optimization
+    if (Platform.isAndroid) {
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
       }
     }
 
@@ -182,34 +217,28 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   // ==================== FOREGROUND SERVICE ====================
   Future<void> _initForegroundService() async {
     try {
-      // Kiểm tra và request notification permission cho Android 13+
-      if (await Permission.notification.isDenied) {
-        await Permission.notification.request();
-      }
-
-      // Đăng ký callback cho foreground task
-      FlutterForegroundTask.setTaskHandler(TunnelTaskHandler());
-
-      // Start foreground service
+      // 👇 Đăng ký callback start
       if (!await FlutterForegroundTask.isRunningService) {
-        await FlutterForegroundTask.startService(
+        final result = await FlutterForegroundTask.startService(
+          serviceId: 256,
           notificationTitle: 'Tunnel Controller',
           notificationText: 'Idle...',
           notificationButtons: [
-            NotificationButton(id: 'stop_tunnel', text: 'Stop Tunnel'),
+            const NotificationButton(id: 'stop_tunnel', text: 'Stop Tunnel'),
           ],
+          notificationInitialRoute: '/',
+          callback: startCallback,
         );
-        _appendLog('✅ Foreground service started');
+        _appendLog('✅ Foreground service started: ${result.success}');
       } else {
         _appendLog('ℹ️ Foreground service already running');
       }
 
-      // Lắng nghe sự kiện từ notification buttons
-      FlutterForegroundTask.onNotificationButtonPressed.listen((button) {
-        if (button.id == 'stop_tunnel') {
-          _stopTunnel();
-        }
-      });
+      // 👇 Kiểm tra xem service đang chạy không
+      final isRunning = await FlutterForegroundTask.isRunningService;
+      if (isRunning) {
+        _appendLog('✅ Service is running');
+      }
     } catch (e) {
       _appendLog('⚠️ Foreground service init: $e');
     }
@@ -221,7 +250,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         notificationTitle: 'Tunnel Controller',
         notificationText: text,
         notificationButtons: [
-          NotificationButton(id: 'stop_tunnel', text: 'Stop Tunnel'),
+          const NotificationButton(id: 'stop_tunnel', text: 'Stop Tunnel'),
         ],
       );
     } catch (e) {
@@ -735,28 +764,54 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   }
 }
 
-// ==================== FOREGROUND TASK HANDLER ====================
-class TunnelTaskHandler extends TaskHandler {
+// ==================== TASK HANDLER ====================
+// 👇 TOP-LEVEL FUNCTION - Bắt buộc phải là top-level hoặc static
+@pragma('vm:entry-point')
+void startCallback() {
+  FlutterForegroundTask.setTaskHandler(MyTaskHandler());
+}
+
+class MyTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    // Called when the foreground task starts
+    // Called when the task is started
   }
 
   @override
-  Future<void> onEvent(DateTime timestamp, TaskStarter starter) async {
-    // Called every interval
+  void onRepeatEvent(DateTime timestamp) {
+    // Called based on the eventAction set in ForegroundTaskOptions
+    // Send data to main isolate (CPU/Temp)
+    // Lưu ý: Không gọi hàm async trong onRepeatEvent
   }
 
   @override
-  Future<void> onDestroy(DateTime timestamp, TaskStarter starter) async {
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
     // Called when the task is destroyed
   }
 
   @override
+  void onReceiveData(Object data) {
+    // Called when data is sent from main isolate
+    // Không dùng trong app này
+  }
+
+  @override
   void onNotificationButtonPressed(String id) {
+    // Called when the notification button is pressed
     if (id == 'stop_tunnel') {
       // Stop tunnel from notification
-      // This will be handled by the main app
+      // Có thể gửi dữ liệu về main isolate để xử lý
     }
+  }
+
+  @override
+  void onNotificationPressed() {
+    // Called when the notification itself is pressed
+    // Open app
+  }
+
+  @override
+  void onNotificationDismissed() {
+    // Called when the notification is dismissed
   }
 }
