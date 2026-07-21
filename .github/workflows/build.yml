@@ -21,7 +21,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'
+          flutter-version: '3.38.0'   # 👈 Nâng lên 3.38.0
           channel: 'stable'
 
       # ============================================================
@@ -64,7 +64,7 @@ jobs:
           chmod +x ../output/*
 
       # ============================================================
-      # TẠO FLUTTER PROJECT VỚI minSdkVersion=21
+      # TẠO FLUTTER PROJECT
       # ============================================================
       - name: Create Flutter project
         run: |
@@ -77,24 +77,24 @@ jobs:
           flutter pub get
 
       # ============================================================
-      # CẤU HÌNH GRADLE (minSdkVersion, Kotlin, build.gradle)
+      # CẤU HÌNH GRADLE
       # ============================================================
-      - name: Configure Gradle for foreground service
+      - name: Configure Gradle
         run: |
           cd tunnel_app
 
-          # 👇 Cập nhật minSdkVersion lên 21 và targetSdkVersion 34
+          # minSdkVersion 21, targetSdkVersion 35 (Android 15)
           sed -i 's/minSdkVersion [0-9]*/minSdkVersion 21/g' android/app/build.gradle
-          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 34/g' android/app/build.gradle
-          sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 34/g' android/app/build.gradle
+          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 35/g' android/app/build.gradle
+          sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 35/g' android/app/build.gradle
 
-          # 👇 Thêm packagingOptions
+          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # 👇 Cập nhật Kotlin version cho foreground service
+          # Kotlin version 1.9.10
           sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.10"/g' android/build.gradle
 
-          # 👇 Cập nhật Gradle version
+          # Gradle 8.6
           sed -i 's/distributionUrl=.*/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.6-bin.zip/g' android/gradle/wrapper/gradle-wrapper.properties
 
       # ============================================================
@@ -118,7 +118,7 @@ jobs:
           chmod +x assets/cloudflared
 
       # ============================================================
-      # CẤU HÌNH ANDROID (MainActivity, Manifest, Kotlin)
+      # CẤU HÌNH ANDROID
       # ============================================================
       - name: Configure Android
         run: |
@@ -150,23 +150,16 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml (full quyền foreground service)
+          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.TGFN.tunnel_controller">
-              <!-- Quyền Internet -->
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-              <!-- Quyền Foreground Service (Android 14+) -->
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-
-              <!-- Quyền Notification (Android 13+) -->
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-              <!-- Quyền khởi động cùng hệ thống -->
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
               <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -197,7 +190,6 @@ jobs:
                       android:name="flutterEmbedding"
                       android:value="2" />
 
-                  <!-- 👇 Foreground Service (bắt buộc cho flutter_foreground_task) -->
                   <service
                       android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
                       android:foregroundServiceType="dataSync"
@@ -207,7 +199,7 @@ jobs:
           </manifest>
           EOF
 
-          # 👇 Tạo file màu sắc (style) để tránh lỗi build
+          # Styles
           mkdir -p android/app/src/main/res/values
           cat > android/app/src/main/res/values/styles.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -221,7 +213,7 @@ jobs:
           </resources>
           EOF
 
-          # 👇 Tạo file drawable launch_background
+          # Launch background
           mkdir -p android/app/src/main/res/drawable
           cat > android/app/src/main/res/drawable/launch_background.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -230,7 +222,6 @@ jobs:
           </layer-list>
           EOF
 
-          # 👇 Tạo file drawable-v21 cho Android 5.0+
           mkdir -p android/app/src/main/res/drawable-v21
           cat > android/app/src/main/res/drawable-v21/launch_background.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
