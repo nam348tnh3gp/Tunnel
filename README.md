@@ -1,171 +1,172 @@
-# Tunnel Controller
+## Tunnel Controller
 
-[![CI](https://github.com/nam348tnh3gp/Tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/nam348tnh3gp/Tunnel/actions/workflows/build.yml)
+[![Build APK](https://github.com/nam348tnh3gp/Tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/nam348tnh3gp/Tunnel/actions/workflows/build.yml)
+[![Releases](https://img.shields.io/github/v/release/nam348tnh3gp/Tunnel?label=releases)](https://github.com/nam348tnh3gp/Tunnel/releases)
 [![Flutter](https://img.shields.io/badge/flutter-3.22.0-blue?logo=flutter)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/dart-%3E%3D3.0.0-blue?logo=dart)](https://dart.dev)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/nam348tnh3gp/Tunnel/blob/main/LICENSE)
 
-A lightweight Flutter app that runs Cloudflare Tunnel (cloudflared) on Android devices. The app can run in a temporary "Try" mode or as a persistent tunnel using a Cloudflare tunnel token. The repository contains a CI workflow that cross-compiles cloudflared for multiple Android ABIs and builds the release APK.
+A compact Flutter app to run Cloudflare Tunnel (cloudflared) on Android devices. The app supports a temporary "Try" mode and a persistent "Token" mode. The repository includes a CI pipeline that cross-compiles cloudflared for multiple Android ABIs and builds a universal APK.
 
 Quick links
-- Source: https://github.com/nam348tnh3gp/Tunnel
+- Repository: https://github.com/nam348tnh3gp/Tunnel
 - Main app: `lib/main.dart`
 - CI workflow: `.github/workflows/build.yml`
-- License: `LICENSE` (Apache-2.0)
 - Releases: https://github.com/nam348tnh3gp/Tunnel/releases
+- License: `LICENSE` (Apache-2.0)
 
 Table of contents
-- [Features](#features)
-- [How it works (high level)](#how-it-works-high-level)
-- [Prebuilt APKs (recommended)](#prebuilt-apks-recommended)
+- [Key features](#key-features)
+- [How it works (overview)](#how-it-works-overview)
+- [Prebuilt APK (recommended)](#prebuilt-apk-recommended)
 - [Prerequisites](#prerequisites)
-- [Build & Run locally](#build--run-locally)
-- [Reproducing CI: building cloudflared](#reproducing-ci-building-cloudflared)
+- [Build & Run (local)](#build--run-local)
+- [Reproduce CI: build cloudflared](#reproduce-ci-build-cloudflared)
 - [CI / GitHub Actions](#ci--github-actions)
 - [Usage (in-app)](#usage-in-app)
-- [Advanced options & flags mapping](#advanced-options--flags-mapping)
+- [Flags & mapping](#flags--mapping)
 - [Troubleshooting](#troubleshooting)
-- [Security & privacy notes](#security--privacy-notes)
+- [Security notes](#security-notes)
 - [Contributing](#contributing)
 - [License](#license)
 
-Features
-- Simple GUI to start/stop Cloudflare Tunnel on Android.
-- Two modes:
-  - Try mode: obtains a temporary public URL (Try Cloudflare) mapping to a local port.
-  - Token mode: runs `tunnel run --token <TOKEN>` for persistent tunnels.
-- Multi-ABI support: CI builds cloudflared for arm64, arm, x86_64, x86 and packages into jniLibs and assets.
-- Binary fallback: if native library is not present, app extracts `assets/cloudflared` to app documents and executes it.
-- Streamed logs, automatic detection of Try Cloudflare public URL, basic device performance stats via `device_info_ce`.
-- Copyable logs and public URL from the UI.
+## Key features
+- Simple UI to start/stop Cloudflare Tunnel on Android devices.
+- Two operation modes:
+  - Try mode — creates a temporary public URL pointing to a local port.
+  - Token mode — runs `tunnel run --token <TOKEN>` for persistent tunnels.
+- Multi-ABI support: CI builds cloudflared for arm64, armeabi-v7a, x86_64, x86 and packages them into `jniLibs` and `assets`.
+- Fallback binary: if native lib not found, the app extracts `assets/cloudflared` to app storage and executes it.
+- Live logs, automatic detection of trycloudflare public URLs, and basic device performance stats (via `device_info_ce`).
+- Copy logs and public URL from the UI.
 
-How it works (high level)
-- The Flutter UI (lib/main.dart) manages user inputs and launches the native cloudflared binary as a subprocess on the device.
-- On init the app tries to read the Android native library directory using a MethodChannel implemented in the Android activity (MainActivity created by the CI script). If `libcloudflared.so` exists there, it uses that binary; otherwise it extracts `assets/cloudflared` into app storage and marks it executable.
-- When the tunnel starts, stdout/stderr are monitored for Try Cloudflare URLs (regex matching `https://<id>.trycloudflare.com`) and displayed to the user.
-- CI builds cloudflared for different GOARCH/NDK targets, copies them into `android/app/src/main/jniLibs/<abi>/libcloudflared.so`, and also copies the arm64 build to `assets/cloudflared` as a fallback.
+## How it works (overview)
+- The Flutter UI (see `lib/main.dart`) collects user inputs and launches the native `cloudflared` binary as a subprocess on the device.
+- On initialization, the app attempts to get the Android native library directory via a MethodChannel. If `libcloudflared.so` exists in that directory it is used; otherwise `assets/cloudflared` is extracted and used as fallback.
+- stdout/stderr are monitored for Try Cloudflare URLs (`https://<id>.trycloudflare.com`), which are shown in the UI when detected.
+- The CI workflow cross-compiles cloudflared for each target ABI, injects the shared libraries into a generated Flutter app, and builds APK(s).
 
-Prebuilt APKs (recommended)
-- Prebuilt APKs are provided in the repository Releases. There is a release artifact named `tunnel-apk.zip` which contains a single APK built to support all supported architectures (aarch32, aarch64, x86, x86_64).
-- This ZIP file is the fastest way to get the app on your device:
-  1. Download `tunnel-apk.zip` from the Releases page.
-  2. Unzip to extract `tunnel.apk` (or similarly named file).
-  3. Install on your Android device:
-     - Enable "Install unknown apps" for your installer (browser or file manager), or use adb:
-       adb install -r path/to/tunnel.apk
-- Notes:
-  - The provided APK is an unsigned/unsigned-by-default build from CI (verify with the release asset). For distribution to users, consider signing the APK.
-  - Verify the APK architecture compatibility on older/rare devices — the bundled APK is intended to support all common ABIs but device firmware variations can affect runtime.
+## Prebuilt APK (recommended)
+We provide prebuilt artifacts in Releases. Download the latest release and you will find an archive named `tunnel-apk.zip` which contains a single APK built to support all common ABIs (aarch32, aarch64, x86, x86_64).
 
-Prerequisites
-- Flutter (3.22.0 recommended — workflow uses this)
+Installation steps:
+1. Go to the Releases page: https://github.com/nam348tnh3gp/Tunnel/releases
+2. Download `tunnel-apk.zip`
+3. Unzip to extract the APK (e.g. `tunnel.apk`)
+4. Install:
+   - Via adb:
+     ```
+     adb install -r path/to/tunnel.apk
+     ```
+   - Or enable "Install unknown apps" on your device and open the APK with a file manager.
+
+Notes:
+- The APK from CI may be unsigned or not Play-signed. For production distribution sign the APK with your key.
+- The bundled APK aims to include all ABIs, but some devices/firmwares might require a specific ABI build — test on your target device.
+
+## Prerequisites (for building locally)
+- Flutter (workflow tested with 3.22.0)
 - Java JDK 17
-- Android SDK + Android NDK (r26c used in CI)
-- (Optional) Go toolchain to build cloudflared locally
-- An Android device or emulator (note: emulators might require ABI compatibility or qemu setup)
+- Android SDK and Android NDK (CI uses r26c)
+- Optional: Go toolchain (if you want to build cloudflared locally)
+- Physical Android device or emulator (emulator ABI must match binary)
 
-Build & Run locally
-1. Clone the repository
+## Build & Run (local)
+1. Clone:
+   ```
    git clone https://github.com/nam348tnh3gp/Tunnel.git
    cd Tunnel
-
-2. Install Flutter and verify:
-   flutter --version
-
-3. Install Android SDK/NDK and connect a device or start an emulator.
-
-4. Get dependencies:
+   ```
+2. Install dependencies:
+   ```
    flutter pub get
-
-5. (Optional) Provide `cloudflared` binary:
-   - For production on device, either:
-     - Place ABI-specific shared libs at:
-       android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
-       android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
-       android/app/src/main/jniLibs/x86_64/libcloudflared.so
-       android/app/src/main/jniLibs/x86/libcloudflared.so
-     - Or place a runnable binary in `assets/cloudflared` (the app will extract to app documents at runtime).
-
-6. Run debug on device:
+   ```
+3. (Optional) Provide native binaries:
+   - Place ABI-specific shared libs in:
+     ```
+     android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+     android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
+     android/app/src/main/jniLibs/x86_64/libcloudflared.so
+     android/app/src/main/jniLibs/x86/libcloudflared.so
+     ```
+   - Or place a runnable binary in `assets/cloudflared` (app will extract at runtime).
+4. Run on device:
+   ```
    flutter run
-
-7. Build release APK:
+   ```
+5. Build release APK:
+   ```
    flutter build apk --release
-   The APK will be available at:
-   build/app/outputs/flutter-apk/app-release.apk
-   (The repository's CI produces APK artifacts too; prefer Releases if available.)
+   ```
+   Output: `build/app/outputs/flutter-apk/app-release.apk`
 
-Reproducing CI: building cloudflared (summary of steps from workflow)
-- CI clones upstream cloudflared and builds per-ABI using the Android NDK toolchains and Go:
-  export GOOS=android
-  export GOARCH=<arm64|arm|amd64|386>
-  export CGO_ENABLED=1
-  export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/<clang-target>"
-  export CXX="...clang++"
-  go build -ldflags='-s -w' -o cloudflared ./cmd/cloudflared
-- After each build the binary is copied and renamed to `libcloudflared.so` inside an `output/<abi>/` directory.
-- The CI then scaffolds a Flutter project, copies the app sources, injects the jniLibs and the arm64 binary into `assets/cloudflared` as a fallback, and builds the APK.
+## Reproduce CI: build cloudflared (summary)
+CI clones https://github.com/cloudflare/cloudflared and builds per-ABI using CGO + Android NDK clang. Example steps used in CI:
+```bash
+export GOOS=android
+export GOARCH=<arm64|arm|amd64|386>
+export CGO_ENABLED=1
+export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/<clang-target>"
+export CXX="...clang++"
+go build -ldflags='-s -w' -o cloudflared ./cmd/cloudflared
+# then copy to output/<abi>/libcloudflared.so
+```
+CI then creates a Flutter project, copies sources, injects `jniLibs/<abi>/libcloudflared.so`, copies arm64 into `assets/cloudflared`, and builds the APK.
 
-CI / GitHub Actions
-- Workflow: `.github/workflows/build.yml`
-- Steps:
-  1. Setup Java (Zulu, JDK 17) and Flutter (3.22.0).
-  2. Download and unpack Android NDK r26c; set ANDROID_NDK_HOME and PATH.
-  3. Clone cloudflared and compile for multiple Android ABIs using CGO and NDK clang.
-  4. Create a Flutter project (`flutter create ... tunnel_app`), copy sources, inject native libs into `jniLibs` and `assets`, then run `flutter build apk --release`.
-  5. Upload APK artifacts.
-- Triggers: push to `main` or `master`, and manual dispatch.
+## CI / GitHub Actions
+See `.github/workflows/build.yml`. High-level steps:
+1. Setup Java (Zulu JDK 17) and Flutter (3.22.0).
+2. Download Android NDK r26c; set `ANDROID_NDK_HOME`.
+3. Clone and cross-compile cloudflared for multiple ABIs.
+4. Scaffold Flutter project, inject native libs and assets, then `flutter build apk --release`.
+5. Upload APK artifacts.
+Triggers: push to `main`/`master`, manual dispatch.
 
-Usage (in-app)
-- Choose Mode:
-  - Try Cloudflared: no token, enter local port (defaults to 8080). Starts tunnel and exposes a trycloudflare public URL.
-  - Token: paste your Cloudflare Tunnel token, the app runs `tunnel run --token <TOKEN>`.
-- Optional settings:
-  - Local port
+## Usage (in-app)
+- Mode:
+  - Try Cloudflared: starts a temporary public URL (no token).
+  - Token: enter Cloudflare Tunnel token (runs `tunnel run --token <TOKEN>`).
+- Common fields:
+  - Local port (default 8080)
   - Custom arguments (space-separated)
-  - QUIC toggle
-  - Post-Quantum toggle
-  - Enable/disable metrics
-  - Region (e.g., hkg, sin, lax)
-  - Edge IP version (auto / 4 / 6)
-  - Custom hostname
-- Start: tap Start; logs appear and public URL (if any) is shown and copyable.
-- Stop: tap Stop to terminate the subprocess.
+  - QUIC on/off
+  - Post-Quantum on/off
+  - Metrics enabled/disabled
+  - Region, Edge IP version, Custom hostname
+- Start/Stop buttons control the native subprocess. Logs are streamed to the UI and Try URLs are auto-detected and shown.
 
-Advanced options & flags mapping
-- QUIC checkbox: when enabled default QUIC is used; unchecking adds `--protocol http2`.
-- Post-Quantum checkbox: adds `--post-quantum`.
-- Metrics toggle: when disabled adds `--management-diagnostics=false`.
-- Region: `--region <value>`
-- Edge IP version: `--edge-ip-version <auto|4|6>`
-- Custom hostname: `--hostname <hostname>`
-- Custom args: appended raw to the argument list.
+## Flags & mapping
+- Disable QUIC → `--protocol http2`
+- Enable Post-Quantum → `--post-quantum`
+- Disable metrics → `--management-diagnostics=false`
+- Region → `--region <value>`
+- Edge IP version → `--edge-ip-version <auto|4|6>`
+- Hostname → `--hostname <hostname>`
+- Custom args → appended as-is
 
-Troubleshooting
+## Troubleshooting
 - Binary not found / permission denied:
-  - Ensure `libcloudflared.so` exists in the correct `jniLibs/<abi>/` folder or `assets/cloudflared` is packaged.
-  - The app attempts to `chmod 755` the binary. If the device prevents execution, verify ABI and Android security policies.
+  - Confirm `libcloudflared.so` is in `jniLibs/<abi>` or `assets/cloudflared` exists.
+  - App runs `chmod 755` after extracting; verify device allows execution.
 - Architecture mismatch:
-  - Use an ABI-compatible cloudflared binary. arm64 devices need arm64-v8a (`aarch64`) builds.
-- No public URL detected:
-  - Check logs for errors. The app searches stdout/stderr for `https://*.trycloudflare.com`.
-  - If running Token mode, verify token validity and network access.
-- Running on emulators:
-  - Some emulators are x86; ensure you have x86/x86_64 binaries or use a physical device.
+  - Use ABI-compatible build for your device (arm64 vs armeabi-v7a vs x86/x86_64).
+- No public URL shown:
+  - Inspect logs. App looks for `https://*.trycloudflare.com`.
+  - Verify token (in Token mode) and network connectivity.
+- Emulators:
+  - Many emulators run x86; ensure matching binaries or use physical device.
 
-Security & privacy notes
-- Tunnel tokens are sensitive — do not share them.
-- The app executes a native binary; ensure you trust the cloudflared build.
-- The AndroidManifest in the generated app uses `usesCleartextTraffic="true"` to ease local testing; consider changing this for release builds.
+## Security notes
+- Tunnel tokens are sensitive — keep them secret.
+- The app executes a native binary; use trusted cloudflared builds.
+- AndroidManifest uses `usesCleartextTraffic="true"` in the generated app to ease testing — review for production.
 
-Contributing
-- Issues, bug reports and PRs are welcome.
+## Contributing
+- File issues or open PRs. When reporting runtime bugs include device model, Android version and logs.
 - Suggested improvements:
-  - Persist user settings (tokens, last-used port).
-  - More robust detection of public URLs and richer log parsing.
-  - Automated per-ABI release artifacts and signed APKs.
-- Please fork, create a branch, and open a PR. Describe device/Android version when reporting runtime bugs.
+  - Persist settings securely (tokens).
+  - Signed release builds and per-ABI artifacts.
+  - Better log parsing and UX for errors.
 
-License
-- This repository includes an `LICENSE` file: Apache License 2.0.
-- See `LICENSE` for full terms.
+## License
+This project is licensed under the Apache License 2.0 — see `LICENSE`.
