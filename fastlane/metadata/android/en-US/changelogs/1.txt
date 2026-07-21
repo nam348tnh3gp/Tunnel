@@ -1,0 +1,5 @@
+Initial release
+- Support token and try mode
+- Advanced configuration options
+- Real-time system monitoring
+- Full architecture support
