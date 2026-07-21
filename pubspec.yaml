@@ -11,7 +11,7 @@ dependencies:
   path_provider: ^2.1.0
   permission_handler: ^11.0.0
   device_info_ce: ^1.0.0
-  flutter_foreground_task: ^8.6.0
+  flutter_foreground_task: ^10.0.0
 
 dev_dependencies:
   flutter_test:
