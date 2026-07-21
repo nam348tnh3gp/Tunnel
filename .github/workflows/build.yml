@@ -21,12 +21,9 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.0'   # 👈 Nâng lên 3.38.0
+          flutter-version: '3.38.0'
           channel: 'stable'
 
-      # ============================================================
-      # CÀI ĐẶT ANDROID NDK
-      # ============================================================
       - name: Setup Android NDK
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
@@ -34,9 +31,6 @@ jobs:
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
           echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      # ============================================================
-      # BUILD CLOUDFLARED CHO TẤT CẢ KIẾN TRÚC
-      # ============================================================
       - name: Build cloudflared for all architectures
         run: |
           git clone https://github.com/cloudflare/cloudflared.git --depth=1
@@ -63,9 +57,6 @@ jobs:
 
           chmod +x ../output/*
 
-      # ============================================================
-      # TẠO FLUTTER PROJECT
-      # ============================================================
       - name: Create Flutter project
         run: |
           flutter create --org com.TGFN --project-name tunnel_controller tunnel_app
@@ -76,30 +67,20 @@ jobs:
           mkdir -p assets
           flutter pub get
 
-      # ============================================================
-      # CẤU HÌNH GRADLE
-      # ============================================================
       - name: Configure Gradle
         run: |
           cd tunnel_app
 
-          # minSdkVersion 21, targetSdkVersion 35 (Android 15)
           sed -i 's/minSdkVersion [0-9]*/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 35/g' android/app/build.gradle
           sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 35/g' android/app/build.gradle
 
-          # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # Kotlin version 1.9.10
           sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.10"/g' android/build.gradle
 
-          # Gradle 8.6
           sed -i 's/distributionUrl=.*/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.6-bin.zip/g' android/gradle/wrapper/gradle-wrapper.properties
 
-      # ============================================================
-      # COPY BINARY VÀO JNILIBS
-      # ============================================================
       - name: Setup native libraries
         run: |
           cd tunnel_app
@@ -117,14 +98,10 @@ jobs:
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           chmod +x assets/cloudflared
 
-      # ============================================================
-      # CẤU HÌNH ANDROID
-      # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
 
-          # MainActivity.kt
           mkdir -p android/app/src/main/kotlin/com/TGFN/tunnel_controller
           cat > android/app/src/main/kotlin/com/TGFN/tunnel_controller/MainActivity.kt << 'EOF'
           package com.TGFN.tunnel_controller
@@ -150,7 +127,6 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -199,7 +175,6 @@ jobs:
           </manifest>
           EOF
 
-          # Styles
           mkdir -p android/app/src/main/res/values
           cat > android/app/src/main/res/values/styles.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -213,7 +188,6 @@ jobs:
           </resources>
           EOF
 
-          # Launch background
           mkdir -p android/app/src/main/res/drawable
           cat > android/app/src/main/res/drawable/launch_background.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -230,9 +204,6 @@ jobs:
           </layer-list>
           EOF
 
-      # ============================================================
-      # BUILD APK
-      # ============================================================
       - name: Build APK
         run: |
           cd tunnel_app
