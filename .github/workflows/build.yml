@@ -64,13 +64,13 @@ jobs:
           chmod +x ../output/*
 
       # ============================================================
-      # TẠO FLUTTER PROJECT (GIỮ NGUYÊN ANDROID FOLDER)
+      # TẠO FLUTTER PROJECT (CÓ CHỈ ĐỊNH PLATFORM ANDROID)
       # ============================================================
       - name: Create Flutter project
         run: |
-          flutter create --org com.TGFN --project-name tunnel_controller tunnel_app
+          flutter create --org com.TGFN --project-name tunnel_controller --platforms=android tunnel_app
           cd tunnel_app
-          # Chỉ xóa lib và pubspec.yaml, KHÔNG xóa android
+          # Xóa lib, pubspec.yaml, assets để thay bằng code của bạn
           rm -rf lib pubspec.yaml assets
           cp -r ../lib .
           cp ../pubspec.yaml .
@@ -84,8 +84,8 @@ jobs:
         run: |
           cd tunnel_app
           
-          # Kiểm tra file tồn tại
-          ls -la android/app/build.gradle || echo "File not found"
+          # Kiểm tra file tồn tại (để an toàn)
+          ls -la android/app/build.gradle || { echo "File not found"; exit 1; }
           
           # Cập nhật minSdkVersion, targetSdkVersion
           sed -i 's/minSdkVersion [0-9]*/minSdkVersion 21/g' android/app/build.gradle
