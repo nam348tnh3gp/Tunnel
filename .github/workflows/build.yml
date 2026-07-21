@@ -18,11 +18,21 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      # 👇 NÂNG CẤP FLUTTER LÊN 3.38.0 để dùng flutter_foreground_task 10.0.0
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.0'
+          flutter-version: '3.38.0'   # Đã sửa
           channel: 'stable'
+
+      # ============================================================
+      # CÀI ĐẶT QEMU CHO ARM64
+      # ============================================================
+      - name: Setup QEMU for ARM64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-arm
 
       # ============================================================
       # CÀI ĐẶT ANDROID NDK
@@ -35,7 +45,7 @@ jobs:
           echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
       # ============================================================
-      # BUILD CLOUDFLARED CHO TẤT CẢ KIẾN TRÚC
+      # BUILD CLOUDFLARED CHO TẤT CẢ KIẾN TRÚC (CGO_ENABLED=1)
       # ============================================================
       - name: Build cloudflared for all architectures
         run: |
@@ -43,6 +53,7 @@ jobs:
           cd cloudflared
           mkdir -p ../output
 
+          # Hàm build cho từng kiến trúc
           build_arch() {
             local arch=$1
             local clang_target=$2
@@ -64,13 +75,13 @@ jobs:
           chmod +x ../output/*
 
       # ============================================================
-      # TẠO FLUTTER PROJECT (CÓ CHỈ ĐỊNH PLATFORM ANDROID)
+      # TẠO FLUTTER PROJECT (GIỮ NGUYÊN ANDROID FOLDER)
       # ============================================================
       - name: Create Flutter project
         run: |
-          flutter create --org com.TGFN --project-name tunnel_controller --platforms=android tunnel_app
+          flutter create --org com.TGFN --project-name tunnel_controller tunnel_app
           cd tunnel_app
-          # Xóa lib, pubspec.yaml, assets để thay bằng code của bạn
+          # Chỉ xóa lib, pubspec.yaml, assets - KHÔNG xóa android
           rm -rf lib pubspec.yaml assets
           cp -r ../lib .
           cp ../pubspec.yaml .
@@ -78,16 +89,13 @@ jobs:
           flutter pub get
 
       # ============================================================
-      # CẤU HÌNH GRADLE (SAU KHI ĐÃ CÓ ANDROID FOLDER)
+      # CẤU HÌNH GRADLE (minSdk, targetSdk, Kotlin, Gradle)
       # ============================================================
       - name: Configure Gradle
         run: |
           cd tunnel_app
           
-          # Kiểm tra file tồn tại (để an toàn)
-          ls -la android/app/build.gradle || { echo "File not found"; exit 1; }
-          
-          # Cập nhật minSdkVersion, targetSdkVersion
+          # Cập nhật minSdkVersion lên 21, targetSdkVersion lên 35
           sed -i 's/minSdkVersion [0-9]*/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 35/g' android/app/build.gradle
           sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 35/g' android/app/build.gradle
@@ -95,14 +103,14 @@ jobs:
           # packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
-          # Kotlin version
+          # Kotlin version 1.9.10
           sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.10"/g' android/build.gradle
 
-          # Gradle version
+          # Gradle 8.6
           sed -i 's/distributionUrl=.*/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.6-bin.zip/g' android/gradle/wrapper/gradle-wrapper.properties
 
       # ============================================================
-      # COPY BINARY VÀO JNILIBS
+      # COPY CLOUDFLARED VÀO JNILIBS (TẤT CẢ KIẾN TRÚC)
       # ============================================================
       - name: Setup native libraries
         run: |
@@ -122,7 +130,7 @@ jobs:
           chmod +x assets/cloudflared
 
       # ============================================================
-      # CẤU HÌNH ANDROID (MainActivity, Manifest)
+      # CẤU HÌNH ANDROID (MainActivity, Manifest với foreground service)
       # ============================================================
       - name: Configure Android
         run: |
@@ -154,7 +162,7 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
+          # AndroidManifest.xml (đã thêm quyền foreground service)
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -203,7 +211,7 @@ jobs:
           </manifest>
           EOF
 
-          # Styles
+          # Styles (để tránh lỗi build)
           mkdir -p android/app/src/main/res/values
           cat > android/app/src/main/res/values/styles.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
