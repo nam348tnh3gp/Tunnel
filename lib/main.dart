@@ -7,10 +7,26 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_ce/device_info_ce.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 const MethodChannel _nativeChannel = MethodChannel('com.yourcompany.tunnel_controller/native');
 
-void main() => runApp(MyApp());
+void main() {
+  // Khởi tạo Foreground Service
+  FlutterForegroundTask.init(
+    androidNotificationOptions: AndroidNotificationOptions(
+      channelId: 'tunnel_channel',
+      channelName: 'Tunnel Service',
+      channelDescription: 'Keep tunnel running in background',
+      channelImportance: NotificationChannelImportance.LOW,
+      priority: NotificationPriority.LOW,
+    ),
+    iosNotificationOptions: IOSNotificationOptions(
+      showNotification: false,
+    ),
+  );
+  runApp(MyApp());
+}
 
 class MyApp extends StatelessWidget {
   @override
@@ -58,32 +74,39 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
   final ScrollController _logScrollController = ScrollController();
 
+  // Foreground service
+  bool _isForegroundRunning = false;
+
   @override
   void initState() {
     super.initState();
     _requestPermissions().then((_) {
       _initBinary();
       _startSystemMonitor();
+      _initForegroundService();
     });
   }
 
   @override
   void dispose() {
     _stopTunnel();
+    _stopForegroundService();
     _systemTimer?.cancel();
     _logScrollController.dispose();
     super.dispose();
   }
 
+  // ==================== PERMISSIONS (Giảm thiểu) ====================
   Future<void> _requestPermissions() async {
-    _appendLog('🔑 Requesting all permissions...');
+    _appendLog('🔑 Requesting permissions...');
 
     List<Permission> permissions = [
       Permission.storage,
-      Permission.phone,
       Permission.notification,
-      Permission.manageExternalStorage,
     ];
+
+    // Chỉ xin storage để fallback (nếu cần)
+    // Không xin phone, manageExternalStorage
 
     for (var perm in permissions) {
       final status = await perm.request();
@@ -100,9 +123,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
 
     _permissionsGranted = true;
-    _appendLog('✅ All critical permissions granted');
+    _appendLog('✅ Permissions requested');
   }
 
+  // ==================== INIT BINARY ====================
   Future<void> _initBinary() async {
     try {
       String? nativeDir;
@@ -150,6 +174,69 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
+  // ==================== FOREGROUND SERVICE ====================
+  Future<void> _initForegroundService() async {
+    try {
+      // Kiểm tra và request notification permission cho Android 13+
+      if (await Permission.notification.isDenied) {
+        await Permission.notification.request();
+      }
+
+      // Start foreground service (nếu chưa chạy)
+      if (!await FlutterForegroundTask.isRunningService) {
+        await FlutterForegroundTask.startService(
+          notificationTitle: 'Tunnel Controller',
+          notificationText: 'Idle...',
+          notificationButtons: [
+            NotificationButton(id: 'stop_tunnel', text: 'Stop Tunnel'),
+          ],
+        );
+        _appendLog('✅ Foreground service initialized');
+      } else {
+        _appendLog('ℹ️ Foreground service already running');
+      }
+
+      // Lắng nghe sự kiện từ notification buttons
+      FlutterForegroundTask.addTaskEventHandler(
+        onEvent: (event) {
+          if (event is NotificationButtonPressedEvent) {
+            if (event.id == 'stop_tunnel') {
+              _stopTunnel();
+            }
+          }
+        },
+        onError: (error) {
+          _appendLog('❌ Foreground service error: $error');
+        },
+      );
+    } catch (e) {
+      _appendLog('⚠️ Foreground service init: $e');
+    }
+  }
+
+  Future<void> _updateForegroundNotification(String text, [String? url]) async {
+    try {
+      final notification = FlutterForegroundTask.updateService(
+        notificationTitle: 'Tunnel Controller',
+        notificationText: text,
+        notificationButtons: [
+          NotificationButton(id: 'stop_tunnel', text: 'Stop Tunnel'),
+        ],
+      );
+    } catch (e) {
+      // Bỏ qua lỗi
+    }
+  }
+
+  Future<void> _stopForegroundService() async {
+    try {
+      await FlutterForegroundTask.stopService();
+      _appendLog('ℹ️ Foreground service stopped');
+    } catch (e) {
+      // Bỏ qua
+    }
+  }
+
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(Duration(seconds: 2), (timer) async {
       if (mounted) {
@@ -161,6 +248,15 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             _cpuInfo = 'CPU: ${cpu.toStringAsFixed(1)}%';
             _tempInfo = '🌡️ Temp: ${temp.toStringAsFixed(1)} °C';
           });
+          // Cập nhật notification với CPU/Temp
+          if (_isRunning) {
+            final status = _tunnelUrl.isNotEmpty
+                ? 'Running: ${_tunnelUrl.length > 30 ? _tunnelUrl.substring(0, 30) + '...' : _tunnelUrl}'
+                : 'Connecting...';
+            await _updateForegroundNotification(
+              '🔄 $status | CPU: ${cpu.toStringAsFixed(1)}%',
+            );
+          }
         } catch (e) {
           if (mounted) {
             setState(() {
@@ -173,6 +269,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
+  // ==================== LOG HELPER ====================
   void _appendLog(String msg) {
     setState(() => _log += '\n$msg');
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -218,6 +315,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     );
   }
 
+  // ==================== START TUNNEL ====================
   void _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready');
@@ -228,14 +326,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       return;
     }
 
-    // 👇 Reset URL khi start tunnel mới
     _tunnelUrl = '';
     setState(() {});
 
     final port = int.tryParse(_portController.text.trim()) ?? 8080;
     List<String> args = [];
 
-    // Build command based on mode
     if (_useTryMode) {
       args.addAll(['tunnel', '--url', 'http://localhost:$port']);
       _appendLog('🚀 Starting Try Cloudflared on port $port');
@@ -249,42 +345,35 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       _appendLog('🔑 Starting tunnel with token');
     }
 
-    // Add custom arguments from input field
     if (_customArgsController.text.trim().isNotEmpty) {
       final customArgs = _customArgsController.text.trim().split(' ');
       args.addAll(customArgs);
       _appendLog('📝 Custom args: ${customArgs.join(' ')}');
     }
 
-    // Add advanced options
     if (!_useQuic) {
       args.add('--protocol');
       args.add('http2');
       _appendLog('📡 Using HTTP/2 protocol');
     }
-
     if (_usePostQuantum) {
       args.add('--post-quantum');
       _appendLog('🔐 Post-Quantum enabled');
     }
-
     if (!_useMetrics) {
       args.add('--management-diagnostics=false');
       _appendLog('📊 Metrics disabled');
     }
-
     if (_region.isNotEmpty) {
       args.add('--region');
       args.add(_region);
       _appendLog('🌍 Region: $_region');
     }
-
     if (_edgeIpVersion != 'auto') {
       args.add('--edge-ip-version');
       args.add(_edgeIpVersion);
       _appendLog('🌐 Edge IP version: $_edgeIpVersion');
     }
-
     if (_customHostname.isNotEmpty) {
       args.add('--hostname');
       args.add(_customHostname);
@@ -311,21 +400,22 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       setState(() {});
       _appendLog('✅ Tunnel started (PID: ${_process!.pid})');
 
+      await _updateForegroundNotification('Connecting...');
+
       _stdoutSub = _process!.stdout.transform(utf8.decoder).listen((data) {
         _appendLog('[OUT] $data');
-        // Extract tunnel URL
         final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
         if (match != null) {
           setState(() {
             _tunnelUrl = match.group(0)!;
           });
           _appendLog('🔗 Public URL: $_tunnelUrl');
+          _updateForegroundNotification('Running: $_tunnelUrl');
         }
       });
 
       _stderrSub = _process!.stderr.transform(utf8.decoder).listen((data) {
         _appendLog('[ERR] $data');
-        // Also try to extract URL from stderr
         if (_tunnelUrl.isEmpty) {
           final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
           if (match != null) {
@@ -333,6 +423,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               _tunnelUrl = match.group(0)!;
             });
             _appendLog('🔗 Public URL: $_tunnelUrl');
+            _updateForegroundNotification('Running: $_tunnelUrl');
           }
         }
       });
@@ -341,30 +432,34 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         if (mounted) {
           setState(() {
             _isRunning = false;
+            _tunnelUrl = '';
             _appendLog('⏹️ Tunnel stopped with code: $code');
           });
+          _updateForegroundNotification('Stopped');
         }
       });
     } catch (e) {
       _appendLog('❌ Error starting: $e');
+      _updateForegroundNotification('Error: $e');
     }
   }
 
+  // ==================== STOP TUNNEL ====================
   void _stopTunnel() {
     if (_process != null) {
       _process!.kill(ProcessSignal.sigterm);
       _stdoutSub?.cancel();
       _stderrSub?.cancel();
-      
-      // 👇 Reset URL khi stop tunnel
       setState(() {
         _isRunning = false;
         _tunnelUrl = '';
         _appendLog('🛑 Stopped');
       });
+      _updateForegroundNotification('Stopped');
     }
   }
 
+  // ==================== UI ====================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -426,13 +521,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               TextField(
                 controller: _customArgsController,
                 decoration: const InputDecoration(
-                  labelText: 'Custom arguments (e.g. --no-tls-verify)',
+                  labelText: 'Custom arguments',
                   border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 12),
 
-              // Advanced options expandable
+              // Advanced options
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey.withOpacity(0.3)),
@@ -451,7 +546,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                       children: [
                         Expanded(
                           child: CheckboxListTile(
-                            title: const Text('QUIC Protocol'),
+                            title: const Text('QUIC'),
                             value: _useQuic,
                             onChanged: (val) => setState(() => _useQuic = val!),
                             dense: true,
@@ -469,18 +564,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                         ),
                       ],
                     ),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: CheckboxListTile(
-                            title: const Text('Metrics'),
-                            value: _useMetrics,
-                            onChanged: (val) => setState(() => _useMetrics = val!),
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                      ],
+                    CheckboxListTile(
+                      title: const Text('Metrics'),
+                      value: _useMetrics,
+                      onChanged: (val) => setState(() => _useMetrics = val!),
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
                     ),
                     const SizedBox(height: 8),
                     TextField(
@@ -517,7 +606,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 12),
 
-              // Start/Stop buttons + URL copy
+              // Start/Stop buttons
               Row(
                 children: [
                   Expanded(
@@ -545,20 +634,52 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 8),
 
-              // Copy URL button (appears when URL is available)
+              // Copy URL button
               if (_tunnelUrl.isNotEmpty)
                 Container(
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: _copyTunnelUrl,
                     icon: const Icon(Icons.copy),
-                    label: Text('📋 Tap to Copy: $_tunnelUrl'),
+                    label: Text('📋 Copy: $_tunnelUrl'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.blueGrey,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                   ),
                 ),
+              const SizedBox(height: 12),
+
+              // Foreground service status
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                decoration: BoxDecoration(
+                  color: _isRunning ? Colors.green.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      _isRunning ? Icons.play_circle : Icons.stop_circle,
+                      color: _isRunning ? Colors.green : Colors.red,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _isRunning ? 'Foreground: Running' : 'Foreground: Idle',
+                      style: TextStyle(
+                        color: _isRunning ? Colors.green : Colors.grey,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      'CPU: ${_cpuInfo.replaceAll('CPU: ', '')}',
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(height: 12),
 
               // CPU & Temp
@@ -589,7 +710,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
               ),
               const SizedBox(height: 4),
               Container(
-                height: 200,
+                height: 180,
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey),
