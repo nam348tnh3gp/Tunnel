@@ -43,7 +43,6 @@ jobs:
           cd cloudflared
           mkdir -p ../output
 
-          # Hàm build cho từng kiến trúc
           build_arch() {
             local arch=$1
             local clang_target=$2
@@ -65,17 +64,38 @@ jobs:
           chmod +x ../output/*
 
       # ============================================================
-      # TẠO FLUTTER PROJECT
+      # TẠO FLUTTER PROJECT VỚI minSdkVersion=21
       # ============================================================
       - name: Create Flutter project
         run: |
-          flutter create --org com.yourcompany --project-name tunnel_controller tunnel_app
+          flutter create --org com.TGFN --project-name tunnel_controller tunnel_app
           cd tunnel_app
           rm -rf lib pubspec.yaml assets
           cp -r ../lib .
           cp ../pubspec.yaml .
           mkdir -p assets
           flutter pub get
+
+      # ============================================================
+      # CẤU HÌNH GRADLE (minSdkVersion, Kotlin, build.gradle)
+      # ============================================================
+      - name: Configure Gradle for foreground service
+        run: |
+          cd tunnel_app
+
+          # 👇 Cập nhật minSdkVersion lên 21 và targetSdkVersion 34
+          sed -i 's/minSdkVersion [0-9]*/minSdkVersion 21/g' android/app/build.gradle
+          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 34/g' android/app/build.gradle
+          sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 34/g' android/app/build.gradle
+
+          # 👇 Thêm packagingOptions
+          sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
+
+          # 👇 Cập nhật Kotlin version cho foreground service
+          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.10"/g' android/build.gradle
+
+          # 👇 Cập nhật Gradle version
+          sed -i 's/distributionUrl=.*/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.6-bin.zip/g' android/gradle/wrapper/gradle-wrapper.properties
 
       # ============================================================
       # COPY BINARY VÀO JNILIBS
@@ -98,19 +118,16 @@ jobs:
           chmod +x assets/cloudflared
 
       # ============================================================
-      # CẤU HÌNH ANDROID
+      # CẤU HÌNH ANDROID (MainActivity, Manifest, Kotlin)
       # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
 
-          # packagingOptions
-          sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
-
           # MainActivity.kt
-          mkdir -p android/app/src/main/kotlin/com/yourcompany/tunnel_controller
-          cat > android/app/src/main/kotlin/com/yourcompany/tunnel_controller/MainActivity.kt << 'EOF'
-          package com.yourcompany.tunnel_controller
+          mkdir -p android/app/src/main/kotlin/com/TGFN/tunnel_controller
+          cat > android/app/src/main/kotlin/com/TGFN/tunnel_controller/MainActivity.kt << 'EOF'
+          package com.TGFN.tunnel_controller
 
           import android.os.Bundle
           import io.flutter.embedding.android.FlutterActivity
@@ -118,7 +135,7 @@ jobs:
           import io.flutter.plugin.common.MethodChannel
 
           class MainActivity : FlutterActivity() {
-              private val CHANNEL = "com.yourcompany.tunnel_controller/native"
+              private val CHANNEL = "com.TGFN.tunnel_controller/native"
 
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
@@ -133,21 +150,32 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml
+          # AndroidManifest.xml (full quyền foreground service)
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.yourcompany.tunnel_controller">
+              package="com.TGFN.tunnel_controller">
+              <!-- Quyền Internet -->
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+              <!-- Quyền Foreground Service (Android 14+) -->
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+              <!-- Quyền Notification (Android 13+) -->
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+              <!-- Quyền khởi động cùng hệ thống -->
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
-                  android:usesCleartextTraffic="true">
+                  android:usesCleartextTraffic="true"
+                  android:requestLegacyExternalStorage="true">
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -164,14 +192,51 @@ jobs:
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
+
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
+
+                  <!-- 👇 Foreground Service (bắt buộc cho flutter_foreground_task) -->
                   <service
                       android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
-                      android:foregroundServiceType="dataSync" />
+                      android:foregroundServiceType="dataSync"
+                      android:exported="false"
+                      android:stopWithTask="true" />
               </application>
           </manifest>
+          EOF
+
+          # 👇 Tạo file màu sắc (style) để tránh lỗi build
+          mkdir -p android/app/src/main/res/values
+          cat > android/app/src/main/res/values/styles.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+                  <item name="android:windowBackground">@drawable/launch_background</item>
+              </style>
+              <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+                  <item name="android:windowBackground">?android:colorBackground</item>
+              </style>
+          </resources>
+          EOF
+
+          # 👇 Tạo file drawable launch_background
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/launch_background.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:drawable="@android:color/black" />
+          </layer-list>
+          EOF
+
+          # 👇 Tạo file drawable-v21 cho Android 5.0+
+          mkdir -p android/app/src/main/res/drawable-v21
+          cat > android/app/src/main/res/drawable-v21/launch_background.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:drawable="?android:colorBackground" />
+          </layer-list>
           EOF
 
       # ============================================================
