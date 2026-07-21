@@ -1,0 +1,15 @@
+🚀 Tunnel Controller is a simple and powerful wrapper for Cloudflare Tunnel (cloudflared), allowing you to easily create and manage Cloudflare tunnels directly on your Android device without using the command line.
+
+✨ Features:
+• Two tunnel modes: Token (production) and Try Cloudflared (test)
+• Advanced options: QUIC/HTTP2, Post-Quantum, metrics, region, custom hostname
+• Real-time CPU and temperature monitoring
+• Full log output with copy and clear functions
+• Automatically extracts and displays the public tunnel URL
+
+🔒 The app builds cloudflared from official source code and includes binaries for all Android architectures (arm64-v8a, armeabi-v7a, x86_64, x86).
+
+📦 No ads, no trackers, fully open source.
+
+Visit GitHub for source code and issue reporting.
+github.com/nam348tnh3gp/Tunnel
