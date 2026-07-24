@@ -118,26 +118,17 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   Timer? _systemTimer;
 
   final ScrollController _logScrollController = ScrollController();
-
-  // SharedPreferences
   late SharedPreferences _prefs;
 
   @override
   void initState() {
     super.initState();
-    _initPrefs();
-    _initBinary();
-    _startSystemMonitor();
-    _checkForegroundService();
-    _restoreState();
-  }
-
-  @override
-  void dispose() {
-    _stopTunnel();
-    _systemTimer?.cancel();
-    _logScrollController.dispose();
-    super.dispose();
+    _initPrefs().then((_) {
+      _restoreState();             // Khôi phục log, URL
+      _initBinary();
+      _startSystemMonitor();
+      _checkForegroundService();   // Kiểm tra service đang chạy
+    });
   }
 
   Future<void> _initPrefs() async {
@@ -145,7 +136,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   }
 
   void _restoreState() {
-    // Khôi phục log và URL từ SharedPreferences
     final savedLog = _prefs.getString('tunnel_log') ?? '';
     final savedUrl = _prefs.getString('tunnel_url') ?? '';
     if (savedLog.isNotEmpty) {
@@ -156,30 +146,42 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // Lưu log vào SharedPreferences
-  void _saveLog() {
+  void _saveState() {
     _prefs.setString('tunnel_log', _log);
-  }
-
-  // Lưu URL vào SharedPreferences
-  void _saveUrl() {
     _prefs.setString('tunnel_url', _tunnelUrl);
   }
 
-  // Xóa dữ liệu đã lưu
-  void _clearSavedState() {
+  void _clearState() {
     _prefs.remove('tunnel_log');
     _prefs.remove('tunnel_url');
   }
 
+  // Kiểm tra foreground service có đang chạy không
   Future<void> _checkForegroundService() async {
     final isRunning = await FlutterForegroundTask.isRunningService;
-    if (isRunning && mounted) {
-      setState(() => _isRunning = true);
-      // Nếu service đang chạy mà process bị mất (app đã đóng), chúng ta không thể khôi phục process,
-      // nhưng vẫn hiển thị trạng thái running và log đã lưu.
-      _appendLog('🔄 App reopened, service is running');
+    if (isRunning) {
+      // Nếu service đang chạy mà process == null (do app đã đóng), thì tunnel đã chết
+      // Chúng ta dừng service và reset state
+      if (_process == null) {
+        await FlutterForegroundTask.stopService();
+        _clearState();
+        setState(() {
+          _isRunning = false;
+          _tunnelUrl = '';
+        });
+        _appendLog('⚠️ Service was running but tunnel process died. Reset state.');
+      } else {
+        setState(() => _isRunning = true);
+      }
     }
+  }
+
+  @override
+  void dispose() {
+    _stopTunnel();
+    _systemTimer?.cancel();
+    _logScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _initBinary() async {
@@ -253,10 +255,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   }
 
   void _appendLog(String msg) {
-    setState(() {
-      _log += '\n$msg';
-    });
-    _saveLog(); // lưu ngay lập tức
+    setState(() => _log += '\n$msg');
+    _saveState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_logScrollController.hasClients) {
         _logScrollController.animateTo(
@@ -310,9 +310,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       return;
     }
 
-    // Xóa dữ liệu cũ khi bắt đầu mới
-    _clearSavedState();
+    // Xóa log cũ khi start mới
+    _log = '';
     _tunnelUrl = '';
+    _saveState();
     setState(() {});
 
     // Bắt đầu foreground service
@@ -405,6 +406,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       setState(() {});
       _appendLog('✅ Tunnel started (PID: ${_process!.pid})');
 
+      // Cập nhật notification khi có URL
       _stdoutSub = _process!.stdout.transform(utf8.decoder).listen((data) {
         _appendLog('[OUT] $data');
         final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
@@ -412,8 +414,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           setState(() {
             _tunnelUrl = match.group(0)!;
           });
-          _saveUrl(); // lưu URL
           _appendLog('🔗 Public URL: $_tunnelUrl');
+          _saveState();
           FlutterForegroundTask.updateService(
             notificationTitle: 'Tunnel is running',
             notificationText: _tunnelUrl,
@@ -429,8 +431,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             setState(() {
               _tunnelUrl = match.group(0)!;
             });
-            _saveUrl();
             _appendLog('🔗 Public URL: $_tunnelUrl');
+            _saveState();
             FlutterForegroundTask.updateService(
               notificationTitle: 'Tunnel is running',
               notificationText: _tunnelUrl,
@@ -445,13 +447,14 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
             _isRunning = false;
             _appendLog('⏹️ Tunnel stopped with code: $code');
           });
-          // Không xóa dữ liệu ở đây, để người dùng thấy log khi mở lại
           FlutterForegroundTask.stopService();
+          _clearState();
         }
       });
     } catch (e) {
       _appendLog('❌ Error starting: $e');
       FlutterForegroundTask.stopService();
+      _clearState();
     }
   }
 
@@ -465,19 +468,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _tunnelUrl = '';
         _appendLog('🛑 Stopped');
       });
-      // Xóa dữ liệu đã lưu
-      _clearSavedState();
       FlutterForegroundTask.stopService();
-    } else {
-      // Nếu không có process (app mở lại mà service đang chạy nhưng không có process)
-      // thì chỉ cần dừng service và xóa dữ liệu
-      _clearSavedState();
-      FlutterForegroundTask.stopService();
-      setState(() {
-        _isRunning = false;
-        _tunnelUrl = '';
-        _log = '';
-      });
+      _clearState();
     }
   }
 
@@ -497,10 +489,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           ),
           IconButton(
             icon: const Icon(Icons.clear_all),
-            onPressed: () {
-              setState(() => _log = '');
-              _clearSavedState();
-            },
+            onPressed: () => setState(() => _log = ''),
             tooltip: 'Clear log',
           ),
         ],
