@@ -16,9 +16,26 @@ class TunnelTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, SendPort? sendPort) async {
     _sendPort = sendPort;
+    sendLog('🟢 onStart called, sendPort: ${sendPort != null ? 'not null' : 'null'}');
 
     // Lấy params đã lưu dưới dạng JSON string
-    final paramsJson = await FlutterForegroundTask.getData<String>(key: 'start_params');
+    String? paramsJson;
+    try {
+      paramsJson = await FlutterForegroundTask.getData<String>(key: 'start_params');
+      sendLog('🔍 getData result: ${paramsJson != null ? 'not null' : 'null'}');
+    } catch (e) {
+      sendLog('❌ getData error: $e');
+      await FlutterForegroundTask.stopService();
+      return;
+    }
+
+    if (paramsJson == null) {
+      // Thử lấy trực tiếp từ saveData với key khác
+      try {
+        paramsJson = await FlutterForegroundTask.getData<String>(key: 'params');
+      } catch (_) {}
+    }
+
     if (paramsJson == null) {
       sendLog('❌ No params provided');
       await FlutterForegroundTask.stopService();
@@ -28,6 +45,7 @@ class TunnelTaskHandler extends TaskHandler {
     final Map<String, dynamic> params;
     try {
       params = jsonDecode(paramsJson) as Map<String, dynamic>;
+      sendLog('📦 Params decoded: ${params.keys}');
     } catch (e) {
       sendLog('❌ Failed to parse params: $e');
       await FlutterForegroundTask.stopService();
@@ -40,6 +58,8 @@ class TunnelTaskHandler extends TaskHandler {
       await FlutterForegroundTask.stopService();
       return;
     }
+
+    sendLog('✅ Binary path: $_binaryPath');
 
     // Acquire WakeLock
     await WakelockPlus.enable();
@@ -54,6 +74,8 @@ class TunnelTaskHandler extends TaskHandler {
     final region = params['region'] as String? ?? '';
     final edgeIpVersion = params['edgeIpVersion'] as String? ?? 'auto';
     final customHostname = params['customHostname'] as String? ?? '';
+
+    sendLog('📝 Token: ${token.isNotEmpty ? '***' : 'empty'}, Port: $port, TryMode: $useTryMode');
 
     // Build command
     List<String> args = [];
@@ -76,7 +98,8 @@ class TunnelTaskHandler extends TaskHandler {
     if (edgeIpVersion != 'auto') args.addAll(['--edge-ip-version', edgeIpVersion]);
     if (customHostname.isNotEmpty) args.addAll(['--hostname', customHostname]);
 
-    sendLog('📋 Command: $_binaryPath ${args.join(' ')}');
+    final command = '$_binaryPath ${args.join(' ')}';
+    sendLog('📋 Command: $command');
 
     try {
       final env = {
@@ -84,7 +107,7 @@ class TunnelTaskHandler extends TaskHandler {
         'ANDROID_ROOT': '/system',
         'LD_LIBRARY_PATH': '/system/lib64:/vendor/lib64',
       };
-
+      sendLog('🔄 Starting process...');
       _process = await Process.start(_binaryPath!, args, runInShell: false, environment: env);
       _isRunning = true;
       sendLog('✅ Tunnel started (PID: ${_process!.pid})');
@@ -112,7 +135,7 @@ class TunnelTaskHandler extends TaskHandler {
         );
       });
     } catch (e) {
-      sendLog('❌ Error starting: $e');
+      sendLog('❌ Error starting process: $e');
       await FlutterForegroundTask.stopService();
     }
   }
@@ -139,6 +162,7 @@ class TunnelTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStop(DateTime timestamp) async {
+    sendLog('🛑 onStop called');
     _process?.kill(ProcessSignal.sigterm);
     await _stdoutSub?.cancel();
     await _stderrSub?.cancel();
@@ -158,6 +182,7 @@ class TunnelTaskHandler extends TaskHandler {
 
   @override
   Future<void> onDestroy(DateTime timestamp, SendPort? sendPort) async {
+    sendLog('💀 onDestroy called');
     _process?.kill();
     await _stdoutSub?.cancel();
     await _stderrSub?.cancel();
