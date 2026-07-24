@@ -25,8 +25,8 @@ void main() {
       priority: NotificationPriority.LOW,
       iconData: const NotificationIconData(
         resType: ResourceType.mipmap,
-        resPrefix: ResourcePrefix.mipmap, // ⬅️ sửa thành mipmap
-        name: 'ic_launcher',
+        resPrefix: ResourcePrefix.ic,   // sửa thành ic (không dùng mipmap)
+        name: 'launcher',               // tên icon (không có prefix ic_)
       ),
     ),
     iosNotificationOptions: const IOSNotificationOptions(
@@ -36,7 +36,7 @@ void main() {
       autoRunOnBoot: false,
       allowWakeLock: true,
       allowWifiLock: false,
-      // Bỏ updateNotification vì không có trong phiên bản này
+      // bỏ updateNotification vì không có trong phiên bản này
     ),
   );
 
@@ -222,8 +222,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     };
 
     try {
-      // Lưu params với key 'start_params'
-      await FlutterForegroundTask.setData(key: 'start_params', value: params);
+      // Lưu params bằng saveData
+      await FlutterForegroundTask.saveData(key: 'start_params', value: params);
 
       final result = await FlutterForegroundTask.startService(
         notificationTitle: 'Starting tunnel...',
