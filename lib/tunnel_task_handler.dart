@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:isolate'; // ⬅️ THÊM DÒNG NÀY
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 class TunnelTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, SendPort? sendPort) async {
-    // Không làm gì, chỉ giữ service sống
+    // Giữ WakeLock khi service chạy
     await WakelockPlus.enable();
   }
 
