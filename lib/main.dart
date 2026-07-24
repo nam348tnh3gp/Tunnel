@@ -1,14 +1,12 @@
-import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:device_info_ce/device_info_ce.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
-import 'package:wakelock_plus/wakelock_plus.dart';
-import 'tunnel_task_handler.dart'; // Import handler
 
-// Entry point cho foreground service
 @pragma('vm:entry-point')
 void startTunnelService() {
   FlutterForegroundTask.setTaskHandler(TunnelTaskHandler());
@@ -17,7 +15,6 @@ void startTunnelService() {
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Khởi tạo FlutterForegroundTask
   FlutterForegroundTask.init(
     androidNotificationOptions: AndroidNotificationOptions(
       channelId: 'tunnel_channel',
@@ -27,14 +24,19 @@ void main() {
       priority: NotificationPriority.LOW,
       iconData: const NotificationIconData(
         resType: ResourceType.mipmap,
-        resPrefix: ResourcePrefix.drawable,
+        resPrefix: ResourcePrefix.mipmap,
         name: 'ic_launcher',
       ),
-      enableVibration: false,
-      enableSound: false,
     ),
     iosNotificationOptions: const IOSNotificationOptions(
       showNotification: false,
+    ),
+    foregroundTaskOptions: const ForegroundTaskOptions(
+      autoRunOnBoot: false,
+      autoRunOnMyPackageReplaced: false,
+      allowWakeLock: true,
+      allowWifiLock: false,
+      updateNotification: true,
     ),
   );
 
@@ -84,14 +86,12 @@ class TunnelControlPage extends StatefulWidget {
 }
 
 class _TunnelControlPageState extends State<TunnelControlPage> {
-  // UI controllers
   final TextEditingController _tokenController = TextEditingController();
   final TextEditingController _portController = TextEditingController(text: '8080');
   final TextEditingController _customArgsController = TextEditingController();
   bool _useTryMode = false;
   bool _isRunning = false;
 
-  // Advanced options
   bool _useQuic = true;
   bool _usePostQuantum = false;
   bool _useMetrics = true;
@@ -99,7 +99,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _edgeIpVersion = 'auto';
   String _customHostname = '';
 
-  // State
   String _log = '';
   String _tunnelUrl = '';
   String _binaryPath = '';
@@ -124,7 +123,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     super.dispose();
   }
 
-  // -------------------- Binary init --------------------
   Future<void> _initBinary() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
@@ -143,7 +141,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- System monitor --------------------
   void _startSystemMonitor() {
     _systemTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       if (!mounted) return;
@@ -164,7 +161,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
-  // -------------------- Giao tiếp với service --------------------
   void _listenToService() {
     FlutterForegroundTask.receivePort?.listen((data) {
       if (data is Map) {
@@ -194,7 +190,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     });
   }
 
-  // -------------------- Start / Stop tunnel --------------------
   Future<void> _startTunnel() async {
     if (!_binaryReady) {
       _appendLog('⏳ Binary not ready');
@@ -227,16 +222,20 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     };
 
     try {
-      await FlutterForegroundTask.startService(
+      await FlutterForegroundTask.setData('start_params', params);
+      final result = await FlutterForegroundTask.startService(
         notificationTitle: 'Starting tunnel...',
         notificationText: 'Please wait',
         callback: startTunnelService,
-        params: params,
       );
-      setState(() => _isRunning = true);
-      _appendLog('🚀 Service started');
+      if (result) {
+        setState(() => _isRunning = true);
+        _appendLog('🚀 Service started');
+      } else {
+        _appendLog('❌ Failed to start service');
+      }
     } catch (e) {
-      _appendLog('❌ Failed to start service: $e');
+      _appendLog('❌ Error: $e');
     }
   }
 
@@ -253,7 +252,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  // -------------------- Copy helpers --------------------
   Future<void> _copyLog() async {
     if (_log.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -280,7 +278,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     );
   }
 
-  // -------------------- Build UI --------------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -306,16 +303,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Mode Selection
                     _buildModeCard(),
                     const SizedBox(height: 16),
-                    // Advanced Options
                     _buildAdvancedCard(),
                     const SizedBox(height: 16),
-                    // Control Buttons + Status
                     _buildControlCard(),
                     const SizedBox(height: 16),
-                    // Log
                     _buildLogCard(),
                   ],
                 ),
