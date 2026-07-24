@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate'; // ⬅️ Cần import để dùng SendPort
+import 'dart:isolate'; // cần cho SendPort
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -17,7 +17,7 @@ class TunnelTaskHandler extends TaskHandler {
   Future<void> onStart(DateTime timestamp, SendPort? sendPort) async {
     _sendPort = sendPort;
 
-    // Lấy params đã set bằng setData(key: 'start_params')
+    // Lấy params đã lưu bằng saveData
     final params = await FlutterForegroundTask.getData<Map<String, dynamic>>(
       key: 'start_params',
     );
@@ -155,5 +155,16 @@ class TunnelTaskHandler extends TaskHandler {
     await _stdoutSub?.cancel();
     await _stderrSub?.cancel();
     await WakelockPlus.disable();
+  }
+
+  @override
+  void onButtonPressed(String id) {
+    // Xử lý khi bấm nút trên notification (nếu có)
+  }
+
+  @override
+  void onNotificationPressed() {
+    // Mở app khi bấm vào notification
+    FlutterForegroundTask.launchApp();
   }
 }
