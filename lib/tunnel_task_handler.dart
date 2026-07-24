@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate'; // ⬅️ Cần import để dùng SendPort
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -16,8 +17,10 @@ class TunnelTaskHandler extends TaskHandler {
   Future<void> onStart(DateTime timestamp, SendPort? sendPort) async {
     _sendPort = sendPort;
 
-    // Lấy params từ startService
-    final params = await FlutterForegroundTask.getData() as Map<String, dynamic>?;
+    // Lấy params đã set bằng setData(key: 'start_params')
+    final params = await FlutterForegroundTask.getData<Map<String, dynamic>>(
+      key: 'start_params',
+    );
     if (params == null) {
       sendLog('❌ No params provided');
       await FlutterForegroundTask.stopService();
