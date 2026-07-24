@@ -15,8 +15,9 @@ class TunnelTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, SendPort? sendPort) async {
     _sendPort = sendPort;
-    // Lấy dữ liệu từ params
-    final params = await FlutterForegroundTask.getData('start_params') as Map<String, dynamic>?;
+
+    // Lấy params từ startService
+    final params = await FlutterForegroundTask.getData() as Map<String, dynamic>?;
     if (params == null) {
       sendLog('❌ No params provided');
       await FlutterForegroundTask.stopService();
