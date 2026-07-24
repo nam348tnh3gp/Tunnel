@@ -96,31 +96,33 @@ jobs:
           flutter pub get
 
       # ============================================================
-      # COPY CLOUDFLARED VÀO JNILIBS (tất cả các arch)
+      # COPY CLOUDFLARED VÀO JNILIBS & ASSETS
       # ============================================================
       - name: Setup native libraries
         run: |
           cd tunnel_app
           
-          # Copy từ output đã build vào đúng thư mục jniLibs
+          # Copy từ output đã build vào đúng thư mục jniLibs (cho tất cả arch)
           for arch in arm64-v8a armeabi-v7a x86_64 x86; do
             mkdir -p android/app/src/main/jniLibs/$arch
             cp ../output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/
           done
           
-          # Copy bản arm64 vào assets làm fallback
+          # Copy bản arm64 vào assets (dùng khi chạy)
           cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
           chmod +x assets/cloudflared
 
       # ============================================================
-      # CẤU HÌNH ANDROID
+      # CẤU HÌNH ANDROID (bao gồm foreground service & wake lock)
       # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
           
+          # Cấu hình packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
 
+          # Tạo MainActivity.kt (giữ nguyên)
           mkdir -p android/app/src/main/kotlin/com/TGNF/tunnel_controller
           cat > android/app/src/main/kotlin/com/TGNF/tunnel_controller/MainActivity.kt << 'EOF'
           package com.TGNF.tunnel_controller
@@ -146,12 +148,15 @@ jobs:
           }
           EOF
 
+          # Ghi đè AndroidManifest.xml với đầy đủ permission và service
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.TGNF.tunnel_controller">
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
@@ -176,6 +181,10 @@ jobs:
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
+                  <service
+                      android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+                      android:foregroundServiceType="dataSync"
+                      android:exported="false" />
               </application>
           </manifest>
           EOF
