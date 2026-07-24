@@ -10,39 +10,48 @@ class TunnelTaskHandler extends TaskHandler {
   StreamSubscription? _stderrSub;
   bool _isRunning = false;
   String? _binaryPath;
+  SendPort? _sendPort;
 
   @override
-  Future<void> onStart(DateTime timestamp, Map<String, dynamic>? params) async {
-    // 1. Acquire WakeLock
-    await WakelockPlus.enable();
-
-    // 2. Lấy tham số từ UI
-    _binaryPath = params?['binaryPath'] as String?;
-    if (_binaryPath == null || _binaryPath!.isEmpty) {
-      sendLog('❌ Binary path not provided');
-      await stopService();
+  Future<void> onStart(DateTime timestamp, SendPort? sendPort) async {
+    _sendPort = sendPort;
+    // Lấy dữ liệu từ params
+    final params = await FlutterForegroundTask.getData('start_params') as Map<String, dynamic>?;
+    if (params == null) {
+      sendLog('❌ No params provided');
+      await FlutterForegroundTask.stopService();
       return;
     }
 
-    final token = params?['token'] as String? ?? '';
-    final port = params?['port'] as int? ?? 8080;
-    final useTryMode = params?['useTryMode'] as bool? ?? false;
-    final customArgs = params?['customArgs'] as List<String>? ?? [];
-    final useQuic = params?['useQuic'] as bool? ?? true;
-    final usePostQuantum = params?['usePostQuantum'] as bool? ?? false;
-    final useMetrics = params?['useMetrics'] as bool? ?? true;
-    final region = params?['region'] as String? ?? '';
-    final edgeIpVersion = params?['edgeIpVersion'] as String? ?? 'auto';
-    final customHostname = params?['customHostname'] as String? ?? '';
+    _binaryPath = params['binaryPath'] as String?;
+    if (_binaryPath == null || _binaryPath!.isEmpty) {
+      sendLog('❌ Binary path not provided');
+      await FlutterForegroundTask.stopService();
+      return;
+    }
 
-    // 3. Xây dựng command
+    // Acquire WakeLock
+    await WakelockPlus.enable();
+
+    final token = params['token'] as String? ?? '';
+    final port = params['port'] as int? ?? 8080;
+    final useTryMode = params['useTryMode'] as bool? ?? false;
+    final customArgs = (params['customArgs'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    final useQuic = params['useQuic'] as bool? ?? true;
+    final usePostQuantum = params['usePostQuantum'] as bool? ?? false;
+    final useMetrics = params['useMetrics'] as bool? ?? true;
+    final region = params['region'] as String? ?? '';
+    final edgeIpVersion = params['edgeIpVersion'] as String? ?? 'auto';
+    final customHostname = params['customHostname'] as String? ?? '';
+
+    // Build command
     List<String> args = [];
     if (useTryMode) {
       args.addAll(['tunnel', '--url', 'http://localhost:$port']);
     } else {
       if (token.isEmpty) {
         sendLog('❌ Token is required');
-        await stopService();
+        await FlutterForegroundTask.stopService();
         return;
       }
       args.addAll(['tunnel', 'run', '--token', token]);
@@ -58,7 +67,6 @@ class TunnelTaskHandler extends TaskHandler {
 
     sendLog('📋 Command: $_binaryPath ${args.join(' ')}');
 
-    // 4. Khởi chạy process
     try {
       final env = {
         'PATH': '/system/bin:/system/xbin:/vendor/bin',
@@ -69,7 +77,10 @@ class TunnelTaskHandler extends TaskHandler {
       _process = await Process.start(_binaryPath!, args, runInShell: false, environment: env);
       _isRunning = true;
       sendLog('✅ Tunnel started (PID: ${_process!.pid})');
-      updateNotification('Tunnel is running', 'Connecting...');
+      await FlutterForegroundTask.updateService(
+        notificationTitle: 'Tunnel is running',
+        notificationText: 'Connecting...',
+      );
 
       _stdoutSub = _process!.stdout.transform(utf8.decoder).listen((data) {
         sendLog('[OUT] $data');
@@ -84,12 +95,14 @@ class TunnelTaskHandler extends TaskHandler {
       _process!.exitCode.then((code) {
         sendLog('⏹️ Tunnel stopped with code: $code');
         _isRunning = false;
-        updateNotification('Tunnel stopped', 'Tap to start again');
-        // Không tự động dừng service – để người dùng quyết định
+        FlutterForegroundTask.updateService(
+          notificationTitle: 'Tunnel stopped',
+          notificationText: 'Tap to start again',
+        );
       });
     } catch (e) {
       sendLog('❌ Error starting: $e');
-      await stopService();
+      await FlutterForegroundTask.stopService();
     }
   }
 
@@ -98,21 +111,19 @@ class TunnelTaskHandler extends TaskHandler {
     if (match != null) {
       final url = match.group(0)!;
       sendUrl(url);
-      updateNotification('Tunnel is running', 'URL: $url');
+      FlutterForegroundTask.updateService(
+        notificationTitle: 'Tunnel is running',
+        notificationText: 'URL: $url',
+      );
     }
   }
 
-  void sendLog(String log) =>
-      FlutterForegroundTask.sendDataToPort({'type': 'log', 'data': log});
+  void sendLog(String log) {
+    _sendPort?.send({'type': 'log', 'data': log});
+  }
 
-  void sendUrl(String url) =>
-      FlutterForegroundTask.sendDataToPort({'type': 'url', 'data': url});
-
-  void updateNotification(String title, String text) {
-    FlutterForegroundTask.updateService(
-      notificationTitle: title,
-      notificationText: text,
-    );
+  void sendUrl(String url) {
+    _sendPort?.send({'type': 'url', 'data': url});
   }
 
   @override
@@ -122,25 +133,23 @@ class TunnelTaskHandler extends TaskHandler {
     await _stderrSub?.cancel();
     _isRunning = false;
     await WakelockPlus.disable();
-    updateNotification('Tunnel stopped', 'Tap to start again');
+    await FlutterForegroundTask.updateService(
+      notificationTitle: 'Tunnel stopped',
+      notificationText: 'Tap to start again',
+    );
     sendLog('🛑 Service stopped');
   }
 
   @override
-  void onReceiveData(Object data) {
-    if (data is Map && data['action'] == 'stop') {
-      stopService();
-    }
+  Future<void> onEvent(DateTime timestamp, SendPort? sendPort) async {
+    // Không cần xử lý
   }
 
   @override
-  void onNotificationPressed() => FlutterForegroundTask.launchApp();
-
-  @override
-  void onDestroy(DateTime timestamp) {
+  Future<void> onDestroy(DateTime timestamp, SendPort? sendPort) async {
     _process?.kill();
-    _stdoutSub?.cancel();
-    _stderrSub?.cancel();
-    WakelockPlus.disable();
+    await _stdoutSub?.cancel();
+    await _stderrSub?.cancel();
+    await WakelockPlus.disable();
   }
 }
