@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:device_info_ce/device_info_ce.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'tunnel_task_handler.dart';
 
 @pragma('vm:entry-point')
 void startTunnelService() {
@@ -24,7 +25,7 @@ void main() {
       priority: NotificationPriority.LOW,
       iconData: const NotificationIconData(
         resType: ResourceType.mipmap,
-        resPrefix: ResourcePrefix.mipmap,
+        resPrefix: ResourcePrefix.drawable,
         name: 'ic_launcher',
       ),
     ),
@@ -33,7 +34,6 @@ void main() {
     ),
     foregroundTaskOptions: const ForegroundTaskOptions(
       autoRunOnBoot: false,
-      autoRunOnMyPackageReplaced: false,
       allowWakeLock: true,
       allowWifiLock: false,
       updateNotification: true,
@@ -222,11 +222,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     };
 
     try {
-      await FlutterForegroundTask.setData('start_params', params);
       final result = await FlutterForegroundTask.startService(
         notificationTitle: 'Starting tunnel...',
         notificationText: 'Please wait',
         callback: startTunnelService,
+        params: params,
       );
       if (result) {
         setState(() => _isRunning = true);
