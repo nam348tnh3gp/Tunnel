@@ -8,9 +8,15 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
+  # Core
   path_provider: ^2.1.0
   permission_handler: ^11.0.0
   device_info_ce: ^1.0.0
+
+  # Foreground service & WakeLock
+  flutter_foreground_task: ^5.0.0
+  wakelock_plus: ^1.1.0
 
 dev_dependencies:
   flutter_test:
@@ -20,4 +26,4 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/cloudflared
+    - assets/cloudflared  
