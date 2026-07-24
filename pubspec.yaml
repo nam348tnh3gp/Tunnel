@@ -17,6 +17,7 @@ dependencies:
   # Foreground service & WakeLock
   flutter_foreground_task: ^5.0.0
   wakelock_plus: ^1.1.0
+  shared_preferences: ^2.5.5
 
 dev_dependencies:
   flutter_test:
