@@ -221,8 +221,10 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     };
 
     try {
-      // Lưu params dưới dạng JSON string
-      await FlutterForegroundTask.saveData(key: 'start_params', value: jsonEncode(params));
+      // Lưu params dưới dạng JSON string với 2 key để dự phòng
+      final jsonParams = jsonEncode(params);
+      await FlutterForegroundTask.saveData(key: 'start_params', value: jsonParams);
+      await FlutterForegroundTask.saveData(key: 'params', value: jsonParams);
 
       final result = await FlutterForegroundTask.startService(
         notificationTitle: 'Starting tunnel...',
