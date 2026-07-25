@@ -74,11 +74,10 @@ jobs:
             chmod +x ../output/$OUTPUT_DIR/libcloudflared.so
           }
           
-          # Build cho từng kiến trúc
+          # Build cho 3 kiến trúc được Flutter hỗ trợ
           build_arch "arm64" "aarch64-linux-android21-clang" "aarch64-linux-android21-clang++" "arm64-v8a"
           build_arch "arm" "armv7a-linux-androideabi21-clang" "armv7a-linux-androideabi21-clang++" "armeabi-v7a"
           build_arch "amd64" "x86_64-linux-android21-clang" "x86_64-linux-android21-clang++" "x86_64"
-          build_arch "386" "i686-linux-android21-clang" "i686-linux-android21-clang++" "x86"
           
           echo "✅ Build completed for all architectures."
 
@@ -96,14 +95,14 @@ jobs:
           flutter pub get
 
       # ============================================================
-      # COPY CLOUDFLARED VÀO JNILIBS & ASSETS
+      # COPY CLOUDFLARED VÀO JNILIBS & ASSETS (chỉ 3 arch)
       # ============================================================
       - name: Setup native libraries
         run: |
           cd tunnel_app
           
-          # Copy từ output đã build vào đúng thư mục jniLibs (cho tất cả arch)
-          for arch in arm64-v8a armeabi-v7a x86_64 x86; do
+          # Copy từ output đã build vào đúng thư mục jniLibs (chỉ 3 arch)
+          for arch in arm64-v8a armeabi-v7a x86_64; do
             mkdir -p android/app/src/main/jniLibs/$arch
             cp ../output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/
           done
@@ -198,31 +197,7 @@ jobs:
           flutter build apk --release --split-per-abi
 
       # ============================================================
-      # BUILD THỦ CÔNG CHO X86 (vì flutter không build mặc định)
-      # ============================================================
-      - name: Build x86 APK manually
-        run: |
-          cd tunnel_app
-          flutter build apk --release --target-platform android-x86
-
-      # ============================================================
-      # DI CHUYỂN FILE X86 APK VÀO THƯ MỤC CHUNG
-      # ============================================================
-      - name: Move x86 APK to output folder
-        run: |
-          cd tunnel_app
-          # Kiểm tra xem file x86 có tồn tại không
-          if [ -f build/app/outputs/flutter-apk/app-x86-release.apk ]; then
-            cp build/app/outputs/flutter-apk/app-x86-release.apk build/app/outputs/flutter-apk/app-x86-release.apk
-          elif [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
-            # Nếu build ra file app-release.apk (fat APK), rename thành app-x86-release.apk
-            cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/app-x86-release.apk
-          else
-            echo "⚠️ x86 APK not found, skipping..."
-          fi
-
-      # ============================================================
-      # NÉN MỖI APK THÀNH .ZIP RIÊNG THEO TÊN ABI
+      # NÉN MỖI APK THÀNH .ZIP RIÊNG THEO TÊN ABI (chỉ 3 file)
       # ============================================================
       - name: Zip each APK with ABI name
         run: |
@@ -230,7 +205,7 @@ jobs:
           # Cài đặt zip nếu chưa có
           sudo apt-get install -y zip || true
           
-          # Liệt kê tất cả file APK
+          # Liệt kê tất cả file APK để kiểm tra
           echo "📂 Available APKs:"
           ls -la *.apk 2>/dev/null || echo "No APK files found"
           
@@ -242,16 +217,10 @@ jobs:
               *arm64-v8a*) zipname="aarch64.zip" ;;
               *armeabi-v7a*) zipname="armv7a.zip" ;;
               *x86_64*) zipname="x86_64.zip" ;;
-              *x86*) zipname="x86.zip" ;;
               *) 
-                # Nếu là app-release.apk (fat APK), xác định dựa trên target platform
+                # Nếu là app-release.apk (fat APK), rename thành universal.zip
                 if [[ "$apk" == "app-release.apk" ]]; then
-                  # Kiểm tra xem có file x86 nào không
-                  if [ -f "app-x86-release.apk" ]; then
-                    continue # đã có file x86 riêng
-                  else
-                    zipname="x86.zip"
-                  fi
+                  zipname="universal.zip"
                 else
                   zipname="${apk%.apk}.zip"
                 fi
@@ -262,7 +231,7 @@ jobs:
           done
 
       # ============================================================
-      # UPLOAD TẤT CẢ CÁC FILE .ZIP
+      # UPLOAD TẤT CẢ CÁC FILE .ZIP (3 file + universal nếu có)
       # ============================================================
       - name: Upload APK ZIPs
         uses: actions/upload-artifact@v4
