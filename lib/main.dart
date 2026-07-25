@@ -112,6 +112,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _nativeDir = '';
   bool _binaryReady = false;
   String _tunnelUrl = '';
+  int? _tunnelPid; // PID của tunnel process
 
   String _cpuInfo = '';
   String _tempInfo = '';
@@ -124,10 +125,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   void initState() {
     super.initState();
     _initPrefs().then((_) {
-      _restoreState();             // Khôi phục log, URL
       _initBinary();
       _startSystemMonitor();
-      _checkForegroundService();   // Kiểm tra service đang chạy
+      _restoreRunningState(); // Khôi phục trạng thái chạy của tunnel
     });
   }
 
@@ -135,44 +135,90 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _prefs = await SharedPreferences.getInstance();
   }
 
-  void _restoreState() {
+  /// Lưu trạng thái tunnel (PID, log, URL) vào SharedPreferences
+  void _saveState() {
+    _prefs.setString('tunnel_log', _log);
+    _prefs.setString('tunnel_url', _tunnelUrl);
+    _prefs.setInt('tunnel_pid', _tunnelPid ?? -1);
+    _prefs.setBool('tunnel_is_running', _isRunning);
+  }
+
+  /// Xóa trạng thái khi dừng hoặc reset
+  void _clearState() {
+    _prefs.remove('tunnel_log');
+    _prefs.remove('tunnel_url');
+    _prefs.remove('tunnel_pid');
+    _prefs.setBool('tunnel_is_running', false);
+  }
+
+  /// Kiểm tra process với PID còn sống không
+  Future<bool> _isProcessAlive(int pid) async {
+    try {
+      // Dùng lệnh ps để kiểm tra process tồn tại
+      final result = await Process.run('ps', ['-p', pid.toString()]);
+      // Nếu exitCode == 0 và có dòng output chứa PID thì process tồn tại
+      if (result.exitCode == 0) {
+        final output = result.stdout as String;
+        return output.contains(pid.toString());
+      }
+      return false;
+    } catch (e) {
+      // Nếu không có quyền, thử dùng kill -0
+      try {
+        final result = await Process.run('kill', ['-0', pid.toString()]);
+        return result.exitCode == 0;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+
+  /// Khôi phục trạng thái tunnel khi app mở lại
+  Future<void> _restoreRunningState() async {
+    final isRunning = _prefs.getBool('tunnel_is_running') ?? false;
+    final pid = _prefs.getInt('tunnel_pid') ?? -1;
     final savedLog = _prefs.getString('tunnel_log') ?? '';
     final savedUrl = _prefs.getString('tunnel_url') ?? '';
+
+    if (isRunning && pid > 0) {
+      // Kiểm tra process còn sống không
+      final alive = await _isProcessAlive(pid);
+      if (alive) {
+        // Process còn sống → giữ nguyên trạng thái
+        setState(() {
+          _isRunning = true;
+          _tunnelPid = pid;
+          _log = savedLog.isNotEmpty ? savedLog : '🔄 Tunnel still running (recovered)';
+          _tunnelUrl = savedUrl;
+        });
+        // Cập nhật notification
+        FlutterForegroundTask.updateService(
+          notificationTitle: 'Tunnel is running',
+          notificationText: _tunnelUrl.isNotEmpty ? _tunnelUrl : 'Recovered...',
+        );
+        _appendLog('✅ Recovered tunnel (PID: $pid)');
+        return;
+      } else {
+        // Process đã chết → reset state
+        _clearState();
+        setState(() {
+          _isRunning = false;
+          _tunnelPid = null;
+          _tunnelUrl = '';
+          _log = savedLog.isEmpty ? '🔄 Tunnel died unexpectedly. Reset.' : _log + '\n🔄 Tunnel died. Reset.';
+        });
+        // Dừng service nếu đang chạy
+        await FlutterForegroundTask.stopService();
+        return;
+      }
+    }
+
+    // Không có trạng thái running, hiển thị log cũ nếu có
     if (savedLog.isNotEmpty) {
       setState(() {
         _log = savedLog;
         _tunnelUrl = savedUrl;
       });
-    }
-  }
-
-  void _saveState() {
-    _prefs.setString('tunnel_log', _log);
-    _prefs.setString('tunnel_url', _tunnelUrl);
-  }
-
-  void _clearState() {
-    _prefs.remove('tunnel_log');
-    _prefs.remove('tunnel_url');
-  }
-
-  // Kiểm tra foreground service có đang chạy không
-  Future<void> _checkForegroundService() async {
-    final isRunning = await FlutterForegroundTask.isRunningService;
-    if (isRunning) {
-      // Nếu service đang chạy mà process == null (do app đã đóng), thì tunnel đã chết
-      // Chúng ta dừng service và reset state
-      if (_process == null) {
-        await FlutterForegroundTask.stopService();
-        _clearState();
-        setState(() {
-          _isRunning = false;
-          _tunnelUrl = '';
-        });
-        _appendLog('⚠️ Service was running but tunnel process died. Reset state.');
-      } else {
-        setState(() => _isRunning = true);
-      }
     }
   }
 
@@ -313,6 +359,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     // Xóa log cũ khi start mới
     _log = '';
     _tunnelUrl = '';
+    _tunnelPid = null;
     _saveState();
     setState(() {});
 
@@ -402,11 +449,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         environment: env,
       );
 
+      _tunnelPid = _process!.pid;
       _isRunning = true;
+      _saveState();
       setState(() {});
       _appendLog('✅ Tunnel started (PID: ${_process!.pid})');
 
-      // Cập nhật notification khi có URL
       _stdoutSub = _process!.stdout.transform(utf8.decoder).listen((data) {
         _appendLog('[OUT] $data');
         final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
@@ -445,6 +493,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         if (mounted) {
           setState(() {
             _isRunning = false;
+            _tunnelPid = null;
             _appendLog('⏹️ Tunnel stopped with code: $code');
           });
           FlutterForegroundTask.stopService();
@@ -465,6 +514,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       _stderrSub?.cancel();
       setState(() {
         _isRunning = false;
+        _tunnelPid = null;
         _tunnelUrl = '';
         _appendLog('🛑 Stopped');
       });
