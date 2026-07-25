@@ -479,21 +479,22 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _isRunning = false;
         _tunnelPid = null;
         _tunnelUrl = '';
-        _appendLog('🛑 Stopped');
+        // Reset log về mặc định như khi mới cài app và thêm dòng thông báo clear
+        _log = '📁 Native dir: $_nativeDir\n✅ Cloudflared ready\n✅ Log cleared';
       });
+      _saveState();
       FlutterForegroundTask.stopService();
       _clearState();
     } else if (_tunnelPid != null && _tunnelPid! > 0) {
-      // Khi restore, _process là null, kill bằng PID
       try {
         await Process.run('kill', ['-15', _tunnelPid.toString()]);
-        _appendLog('🛑 Sent SIGTERM to PID ${_tunnelPid}');
         setState(() {
           _isRunning = false;
           _tunnelPid = null;
           _tunnelUrl = '';
-          _appendLog('🛑 Stopped (by PID)');
+          _log = '📁 Native dir: $_nativeDir\n✅ Cloudflared ready\n✅ Log cleared';
         });
+        _saveState();
         FlutterForegroundTask.stopService();
         _clearState();
       } catch (e) {
