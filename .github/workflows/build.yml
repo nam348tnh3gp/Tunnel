@@ -190,7 +190,7 @@ jobs:
           EOF
 
       # ============================================================
-      # BUILD APK CHIA THEO ABI (4 file APK)
+      # BUILD APK CHIA THEO ABI (3 file APK)
       # ============================================================
       - name: Build APK (split per ABI)
         run: |
@@ -198,28 +198,71 @@ jobs:
           flutter build apk --release --split-per-abi
 
       # ============================================================
+      # BUILD THỦ CÔNG CHO X86 (vì flutter không build mặc định)
+      # ============================================================
+      - name: Build x86 APK manually
+        run: |
+          cd tunnel_app
+          flutter build apk --release --target-platform android-x86
+
+      # ============================================================
+      # DI CHUYỂN FILE X86 APK VÀO THƯ MỤC CHUNG
+      # ============================================================
+      - name: Move x86 APK to output folder
+        run: |
+          cd tunnel_app
+          # Kiểm tra xem file x86 có tồn tại không
+          if [ -f build/app/outputs/flutter-apk/app-x86-release.apk ]; then
+            cp build/app/outputs/flutter-apk/app-x86-release.apk build/app/outputs/flutter-apk/app-x86-release.apk
+          elif [ -f build/app/outputs/flutter-apk/app-release.apk ]; then
+            # Nếu build ra file app-release.apk (fat APK), rename thành app-x86-release.apk
+            cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/app-x86-release.apk
+          else
+            echo "⚠️ x86 APK not found, skipping..."
+          fi
+
+      # ============================================================
       # NÉN MỖI APK THÀNH .ZIP RIÊNG THEO TÊN ABI
       # ============================================================
       - name: Zip each APK with ABI name
         run: |
           cd tunnel_app/build/app/outputs/flutter-apk
-          # Cài đặt zip nếu chưa có (thường đã có sẵn)
+          # Cài đặt zip nếu chưa có
           sudo apt-get install -y zip || true
           
+          # Liệt kê tất cả file APK
+          echo "📂 Available APKs:"
+          ls -la *.apk 2>/dev/null || echo "No APK files found"
+          
           for apk in *.apk; do
+            # Bỏ qua nếu không có file APK
+            [ -f "$apk" ] || continue
+            
             case "$apk" in
               *arm64-v8a*) zipname="aarch64.zip" ;;
               *armeabi-v7a*) zipname="armv7a.zip" ;;
               *x86_64*) zipname="x86_64.zip" ;;
               *x86*) zipname="x86.zip" ;;
-              *) zipname="${apk%.apk}.zip" ;;
+              *) 
+                # Nếu là app-release.apk (fat APK), xác định dựa trên target platform
+                if [[ "$apk" == "app-release.apk" ]]; then
+                  # Kiểm tra xem có file x86 nào không
+                  if [ -f "app-x86-release.apk" ]; then
+                    continue # đã có file x86 riêng
+                  else
+                    zipname="x86.zip"
+                  fi
+                else
+                  zipname="${apk%.apk}.zip"
+                fi
+                ;;
             esac
             echo "📦 Creating $zipname from $apk"
             zip "$zipname" "$apk"
           done
 
       # ============================================================
-      # UPLOAD TẤT CẢ CÁC FILE .ZIP (4 FILE)
+      # UPLOAD TẤT CẢ CÁC FILE .ZIP
       # ============================================================
       - name: Upload APK ZIPs
         uses: actions/upload-artifact@v4
