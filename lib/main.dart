@@ -671,60 +671,60 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        // Nút menu 3 gạch ngang được đặt ở bên trái
+        leading: PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          onSelected: (value) {
+            switch (value) {
+              case 'about':
+                _showAboutDialog();
+                break;
+              case 'arguments':
+                _showArgumentsDialog();
+                break;
+              case 'disclaimer':
+                _showDisclaimerDialog();
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'about',
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 20),
+                  SizedBox(width: 12),
+                  Text('About App'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'arguments',
+              child: Row(
+                children: [
+                  Icon(Icons.code, size: 20),
+                  SizedBox(width: 12),
+                  Text('List Arguments'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'disclaimer',
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_outlined, size: 20),
+                  SizedBox(width: 12),
+                  Text('Disclaimer'),
+                ],
+              ),
+            ),
+          ],
+        ),
         title: const Text('Cloudflare Tunnel'),
         centerTitle: true,
         elevation: 0,
         backgroundColor: Colors.transparent,
         actions: [
-          // Menu 3 gạch ngang
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            onSelected: (value) {
-              switch (value) {
-                case 'about':
-                  _showAboutDialog();
-                  break;
-                case 'arguments':
-                  _showArgumentsDialog();
-                  break;
-                case 'disclaimer':
-                  _showDisclaimerDialog();
-                  break;
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(
-                value: 'about',
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, size: 20),
-                    SizedBox(width: 12),
-                    Text('About App'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'arguments',
-                child: Row(
-                  children: [
-                    Icon(Icons.code, size: 20),
-                    SizedBox(width: 12),
-                    Text('List Arguments'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'disclaimer',
-                child: Row(
-                  children: [
-                    Icon(Icons.warning_amber_outlined, size: 20),
-                    SizedBox(width: 12),
-                    Text('Disclaimer'),
-                  ],
-                ),
-              ),
-            ],
-          ),
           IconButton(
             icon: const Icon(Icons.copy),
             onPressed: _copyLog,
