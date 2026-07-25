@@ -112,7 +112,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _nativeDir = '';
   bool _binaryReady = false;
   String _tunnelUrl = '';
-  int? _tunnelPid; // PID của tunnel process
+  int? _tunnelPid;
 
   String _cpuInfo = '';
   String _tempInfo = '';
@@ -127,7 +127,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _initPrefs().then((_) {
       _initBinary();
       _startSystemMonitor();
-      _restoreRunningState(); // Khôi phục trạng thái chạy của tunnel
+      _restoreRunningState(); // Khôi phục trạng thái
     });
   }
 
@@ -135,7 +135,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _prefs = await SharedPreferences.getInstance();
   }
 
-  /// Lưu trạng thái tunnel (PID, log, URL) vào SharedPreferences
   void _saveState() {
     _prefs.setString('tunnel_log', _log);
     _prefs.setString('tunnel_url', _tunnelUrl);
@@ -143,7 +142,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _prefs.setBool('tunnel_is_running', _isRunning);
   }
 
-  /// Xóa trạng thái khi dừng hoặc reset
   void _clearState() {
     _prefs.remove('tunnel_log');
     _prefs.remove('tunnel_url');
@@ -151,75 +149,46 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _prefs.setBool('tunnel_is_running', false);
   }
 
-  /// Kiểm tra process với PID còn sống không
-  Future<bool> _isProcessAlive(int pid) async {
-    try {
-      // Dùng lệnh ps để kiểm tra process tồn tại
-      final result = await Process.run('ps', ['-p', pid.toString()]);
-      // Nếu exitCode == 0 và có dòng output chứa PID thì process tồn tại
-      if (result.exitCode == 0) {
-        final output = result.stdout as String;
-        return output.contains(pid.toString());
-      }
-      return false;
-    } catch (e) {
-      // Nếu không có quyền, thử dùng kill -0
-      try {
-        final result = await Process.run('kill', ['-0', pid.toString()]);
-        return result.exitCode == 0;
-      } catch (_) {
-        return false;
-      }
-    }
-  }
-
-  /// Khôi phục trạng thái tunnel khi app mở lại
+  /// Khôi phục trạng thái dựa trên service và trạng thái lưu
   Future<void> _restoreRunningState() async {
     final isRunning = _prefs.getBool('tunnel_is_running') ?? false;
     final pid = _prefs.getInt('tunnel_pid') ?? -1;
     final savedLog = _prefs.getString('tunnel_log') ?? '';
     final savedUrl = _prefs.getString('tunnel_url') ?? '';
 
-    if (isRunning && pid > 0) {
-      // Kiểm tra process còn sống không
-      final alive = await _isProcessAlive(pid);
-      if (alive) {
-        // Process còn sống → giữ nguyên trạng thái
-        setState(() {
-          _isRunning = true;
-          _tunnelPid = pid;
-          _log = savedLog.isNotEmpty ? savedLog : '🔄 Tunnel still running (recovered)';
-          _tunnelUrl = savedUrl;
-        });
-        // Cập nhật notification
+    // Kiểm tra service có đang chạy không
+    final serviceRunning = await FlutterForegroundTask.isRunningService;
+
+    // Nếu service đang chạy và trạng thái lưu là running → coi tunnel vẫn chạy
+    if (isRunning && serviceRunning) {
+      setState(() {
+        _isRunning = true;
+        _tunnelPid = pid;
+        _log = savedLog.isNotEmpty ? savedLog : '🔄 Tunnel running (recovered)';
+        _tunnelUrl = savedUrl;
+      });
+      if (_tunnelUrl.isNotEmpty) {
         FlutterForegroundTask.updateService(
           notificationTitle: 'Tunnel is running',
-          notificationText: _tunnelUrl.isNotEmpty ? _tunnelUrl : 'Recovered...',
+          notificationText: _tunnelUrl,
         );
-        _appendLog('✅ Recovered tunnel (PID: $pid)');
-        return;
-      } else {
-        // Process đã chết → reset state
-        _clearState();
-        setState(() {
-          _isRunning = false;
-          _tunnelPid = null;
-          _tunnelUrl = '';
-          _log = savedLog.isEmpty ? '🔄 Tunnel died unexpectedly. Reset.' : _log + '\n🔄 Tunnel died. Reset.';
-        });
-        // Dừng service nếu đang chạy
-        await FlutterForegroundTask.stopService();
-        return;
       }
+      _appendLog('✅ Recovered tunnel (PID: $pid)');
+      return;
     }
 
-    // Không có trạng thái running, hiển thị log cũ nếu có
+    // Nếu service không chạy hoặc trạng thái không running → reset
     if (savedLog.isNotEmpty) {
       setState(() {
-        _log = savedLog;
+        _log = savedLog + (isRunning ? '\n⚠️ Tunnel was running but service stopped. Reset.' : '');
         _tunnelUrl = savedUrl;
       });
     }
+    _clearState();
+    setState(() {
+      _isRunning = false;
+      _tunnelPid = null;
+    });
   }
 
   @override
