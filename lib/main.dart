@@ -127,7 +127,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _initPrefs().then((_) {
       _initBinary();
       _startSystemMonitor();
-      _restoreRunningState(); // Khôi phục trạng thái
+      _restoreRunningState();
     });
   }
 
@@ -149,21 +149,18 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _prefs.setBool('tunnel_is_running', false);
   }
 
-  /// Khôi phục trạng thái dựa trên service và trạng thái lưu
   Future<void> _restoreRunningState() async {
     final isRunning = _prefs.getBool('tunnel_is_running') ?? false;
     final pid = _prefs.getInt('tunnel_pid') ?? -1;
     final savedLog = _prefs.getString('tunnel_log') ?? '';
     final savedUrl = _prefs.getString('tunnel_url') ?? '';
 
-    // Kiểm tra service có đang chạy không
     final serviceRunning = await FlutterForegroundTask.isRunningService;
 
-    // Nếu service đang chạy và trạng thái lưu là running → coi tunnel vẫn chạy
     if (isRunning && serviceRunning) {
       setState(() {
         _isRunning = true;
-        _tunnelPid = pid;
+        _tunnelPid = pid > 0 ? pid : null;
         _log = savedLog.isNotEmpty ? savedLog : '🔄 Tunnel running (recovered)';
         _tunnelUrl = savedUrl;
       });
@@ -177,7 +174,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       return;
     }
 
-    // Nếu service không chạy hoặc trạng thái không running → reset
     if (savedLog.isNotEmpty) {
       setState(() {
         _log = savedLog + (isRunning ? '\n⚠️ Tunnel was running but service stopped. Reset.' : '');
@@ -325,14 +321,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       return;
     }
 
-    // Xóa log cũ khi start mới
     _log = '';
     _tunnelUrl = '';
     _tunnelPid = null;
     _saveState();
     setState(() {});
 
-    // Bắt đầu foreground service
     try {
       final started = await FlutterForegroundTask.startService(
         notificationTitle: 'Tunnel is running',
@@ -476,11 +470,11 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     }
   }
 
-  void _stopTunnel() {
+  void _stopTunnel() async {
     if (_process != null) {
       _process!.kill(ProcessSignal.sigterm);
-      _stdoutSub?.cancel();
-      _stderrSub?.cancel();
+      await _stdoutSub?.cancel();
+      await _stderrSub?.cancel();
       setState(() {
         _isRunning = false;
         _tunnelPid = null;
@@ -489,6 +483,24 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       });
       FlutterForegroundTask.stopService();
       _clearState();
+    } else if (_tunnelPid != null && _tunnelPid! > 0) {
+      // Khi restore, _process là null, kill bằng PID
+      try {
+        await Process.run('kill', ['-15', _tunnelPid.toString()]);
+        _appendLog('🛑 Sent SIGTERM to PID ${_tunnelPid}');
+        setState(() {
+          _isRunning = false;
+          _tunnelPid = null;
+          _tunnelUrl = '';
+          _appendLog('🛑 Stopped (by PID)');
+        });
+        FlutterForegroundTask.stopService();
+        _clearState();
+      } catch (e) {
+        _appendLog('❌ Failed to kill PID ${_tunnelPid}: $e');
+      }
+    } else {
+      _appendLog('⚠️ No process to stop');
     }
   }
 
@@ -701,7 +713,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: ElevatedButton.icon(
-                                    onPressed: _isRunning ? _stopTunnel : null,
+                                    onPressed: _isRunning ? () => _stopTunnel() : null,
                                     icon: const Icon(Icons.stop),
                                     label: const Text('Stop'),
                                     style: ElevatedButton.styleFrom(
