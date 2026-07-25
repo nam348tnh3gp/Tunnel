@@ -190,15 +190,39 @@ jobs:
           EOF
 
       # ============================================================
-      # BUILD APK (hỗ trợ đa kiến trúc)
+      # BUILD APK CHIA THEO ABI (4 file APK)
       # ============================================================
-      - name: Build APK (full architecture)
+      - name: Build APK (split per ABI)
         run: |
           cd tunnel_app
-          flutter build apk --release
+          flutter build apk --release --split-per-abi
 
-      - name: Upload APK
+      # ============================================================
+      # NÉN MỖI APK THÀNH .ZIP RIÊNG THEO TÊN ABI
+      # ============================================================
+      - name: Zip each APK with ABI name
+        run: |
+          cd tunnel_app/build/app/outputs/flutter-apk
+          # Cài đặt zip nếu chưa có (thường đã có sẵn)
+          sudo apt-get install -y zip || true
+          
+          for apk in *.apk; do
+            case "$apk" in
+              *arm64-v8a*) zipname="aarch64.zip" ;;
+              *armeabi-v7a*) zipname="armv7a.zip" ;;
+              *x86_64*) zipname="x86_64.zip" ;;
+              *x86*) zipname="x86.zip" ;;
+              *) zipname="${apk%.apk}.zip" ;;
+            esac
+            echo "📦 Creating $zipname from $apk"
+            zip "$zipname" "$apk"
+          done
+
+      # ============================================================
+      # UPLOAD TẤT CẢ CÁC FILE .ZIP (4 FILE)
+      # ============================================================
+      - name: Upload APK ZIPs
         uses: actions/upload-artifact@v4
         with:
-          name: tunnel-apk
-          path: tunnel_app/build/app/outputs/flutter-apk/*.apk
+          name: tunnel-apks
+          path: tunnel_app/build/app/outputs/flutter-apk/*.zip
