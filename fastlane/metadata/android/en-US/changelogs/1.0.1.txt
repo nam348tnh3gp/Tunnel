@@ -1,7 +1,0 @@
-Version 1.0.1
-- Added foreground service for background tunnel operation
-- Integrated WakeLock to keep CPU active while tunnel runs
-- State recovery: preserve log, URL, and running status when app is reopened
-- Persistent storage with SharedPreferences
-- Notification shows public tunnel URL when available
-- Fixed several stability issues and improved error handling
