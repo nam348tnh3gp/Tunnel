@@ -24,18 +24,12 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      # ============================================================
-      # CÀI ĐẶT QEMU CHO ARM64 (hỗ trợ mô phỏng nếu cần)
-      # ============================================================
       - name: Setup QEMU for ARM64
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-user-static binfmt-support
           sudo update-binfmts --enable qemu-arm
 
-      # ============================================================
-      # CÀI ĐẶT ANDROID NDK
-      # ============================================================
       - name: Setup Android NDK
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
@@ -43,85 +37,54 @@ jobs:
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
           echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      # ============================================================
-      # BUILD CLOUDFLARED CHO TẤT CẢ KIẾN TRÚC ANDROID
-      # ============================================================
       - name: Build cloudflared for Android (all architectures)
         run: |
           git clone https://github.com/cloudflare/cloudflared.git --depth=1
           cd cloudflared
-          
-          # Hàm build cho từng kiến trúc
           build_arch() {
             local GOARCH=$1
             local CC_ARCH=$2
             local CXX_ARCH=$3
             local OUTPUT_DIR=$4
-            
-            echo "🔨 Building for $GOARCH..."
+            echo "Building for $GOARCH..."
             export GOOS=android
             export GOARCH=$GOARCH
             export CGO_ENABLED=1
             export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CC_ARCH"
             export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CXX_ARCH"
-            
             go build -ldflags="-s -w" -o cloudflared ./cmd/cloudflared
             file cloudflared
             readelf -d cloudflared | grep NEEDED || echo "No dynamic dependencies"
-            
             mkdir -p ../output/$OUTPUT_DIR
             cp cloudflared ../output/$OUTPUT_DIR/libcloudflared.so
             chmod +x ../output/$OUTPUT_DIR/libcloudflared.so
           }
-          
-          # Build cho 3 kiến trúc được Flutter hỗ trợ
           build_arch "arm64" "aarch64-linux-android21-clang" "aarch64-linux-android21-clang++" "arm64-v8a"
           build_arch "arm" "armv7a-linux-androideabi21-clang" "armv7a-linux-androideabi21-clang++" "armeabi-v7a"
           build_arch "amd64" "x86_64-linux-android21-clang" "x86_64-linux-android21-clang++" "x86_64"
-          
-          echo "✅ Build completed for all architectures."
+          echo "Build completed for all architectures."
 
-      # ============================================================
-      # TẠO FLUTTER PROJECT
-      # ============================================================
       - name: Create Flutter project
         run: |
           flutter create --org com.TGNF --project-name tunnel_controller tunnel_app
           cd tunnel_app
-          rm -rf lib pubspec.yaml assets
+          rm -rf lib pubspec.yaml
           cp -r ../lib .
           cp ../pubspec.yaml .
-          mkdir -p assets
           flutter pub get
 
-      # ============================================================
-      # COPY CLOUDFLARED VÀO JNILIBS & ASSETS (chỉ 3 arch)
-      # ============================================================
       - name: Setup native libraries
         run: |
           cd tunnel_app
-          
-          # Copy từ output đã build vào đúng thư mục jniLibs (chỉ 3 arch)
           for arch in arm64-v8a armeabi-v7a x86_64; do
             mkdir -p android/app/src/main/jniLibs/$arch
             cp ../output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/
           done
-          
-          # Copy bản arm64 vào assets (dùng khi chạy)
-          cp android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so assets/cloudflared
-          chmod +x assets/cloudflared
 
-      # ============================================================
-      # CẤU HÌNH ANDROID (bao gồm foreground service & wake lock)
-      # ============================================================
       - name: Configure Android
         run: |
           cd tunnel_app
-          
-          # Cấu hình packagingOptions
           sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
-
-          # Tạo MainActivity.kt (giữ nguyên)
           mkdir -p android/app/src/main/kotlin/com/TGNF/tunnel_controller
           cat > android/app/src/main/kotlin/com/TGNF/tunnel_controller/MainActivity.kt << 'EOF'
           package com.TGNF.tunnel_controller
@@ -146,8 +109,6 @@ jobs:
               }
           }
           EOF
-
-          # Ghi đè AndroidManifest.xml với đầy đủ permission và service
           mkdir -p android/app/src/main
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -188,37 +149,24 @@ jobs:
           </manifest>
           EOF
 
-      # ============================================================
-      # BUILD APK CHIA THEO ABI (3 file APK)
-      # ============================================================
       - name: Build APK (split per ABI)
         run: |
           cd tunnel_app
           flutter build apk --release --split-per-abi
 
-      # ============================================================
-      # NÉN MỖI APK THÀNH .ZIP RIÊNG THEO TÊN ABI (chỉ 3 file)
-      # ============================================================
       - name: Zip each APK with ABI name
         run: |
           cd tunnel_app/build/app/outputs/flutter-apk
-          # Cài đặt zip nếu chưa có
           sudo apt-get install -y zip || true
-          
-          # Liệt kê tất cả file APK để kiểm tra
-          echo "📂 Available APKs:"
+          echo "Available APKs:"
           ls -la *.apk 2>/dev/null || echo "No APK files found"
-          
           for apk in *.apk; do
-            # Bỏ qua nếu không có file APK
             [ -f "$apk" ] || continue
-            
             case "$apk" in
               *arm64-v8a*) zipname="aarch64.zip" ;;
               *armeabi-v7a*) zipname="armv7a.zip" ;;
               *x86_64*) zipname="x86_64.zip" ;;
-              *) 
-                # Nếu là app-release.apk (fat APK), rename thành universal.zip
+              *)
                 if [[ "$apk" == "app-release.apk" ]]; then
                   zipname="universal.zip"
                 else
@@ -226,13 +174,10 @@ jobs:
                 fi
                 ;;
             esac
-            echo "📦 Creating $zipname from $apk"
+            echo "Creating $zipname from $apk"
             zip "$zipname" "$apk"
           done
 
-      # ============================================================
-      # UPLOAD TẤT CẢ CÁC FILE .ZIP (3 file + universal nếu có)
-      # ============================================================
       - name: Upload APK ZIPs
         uses: actions/upload-artifact@v4
         with:
