@@ -1,0 +1,57 @@
+Version 1.0.1-beta
+✨ New Features:
+- Added foreground service for background tunnel operation
+- Integrated WakeLock to keep CPU active while tunnel runs
+- State recovery: preserve log, URL, and running status when app is reopened
+- Persistent storage with SharedPreferences
+- Notification shows public tunnel URL when available
+- Support for Try Cloudflared mode (no token required)
+- Support for Token mode with secure storage
+
+⚙️ Advanced Options:
+- QUIC protocol toggle
+- Post-Quantum encryption support
+- Region selection (hkg, sin, lax, etc.)
+- Edge IP version selection (IPv4, IPv6, Auto)
+- Custom hostname support
+- Edge bind address configuration
+- Custom label for connector
+- Additional arguments support
+- DNS overwrite option
+- Metrics enable/disable
+
+🔧 Technical Improvements:
+- Removed fallback binary to reduce APK size
+- Token encryption using flutter_secure_storage
+- Debounced SharedPreferences writes for better performance
+- Proper process cleanup and resource management
+- Improved error handling for service failures
+- Reset process state on exit to prevent stale references
+
+🐛 Bug Fixes:
+- Fixed process not resetting when tunnel stops
+- Fixed foreground service not stopping when process start fails
+- Fixed binary detection for all architectures (ARM64, ARMv7, x86_64)
+- Improved system monitoring (CPU, temperature)
+
+📱 System Requirements:
+- Android 8.0 (API 26) or higher
+- Internet permission required
+- Foreground service permission required for background operation
+
+🔒 Security:
+- Token stored encrypted using flutter_secure_storage
+- No plaintext token storage
+- All network traffic uses Cloudflare's secure tunnel protocol
+
+⚠️ Disclaimer:
+This is an unofficial client for Cloudflare Tunnel. Use at your own risk. The developer is not responsible for any damages or data loss. Cloudflare Tunnel is a service provided by Cloudflare Inc. By using this application, you agree to the Cloudflare Terms of Service and Privacy Policy.
+
+📦 APK Architectures:
+- aarch64.zip (ARM64-v8a)
+- armv7a.zip (ARMv7)
+- x86_64.zip (x86_64)
+
+🔗 Links:
+- Source: https://github.com/nam348tnh3gp/Tunnel
+- Cloudflare: https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/
