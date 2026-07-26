@@ -3,12 +3,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:device_info_ce/device_info_ce.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'tunnel_task_handler.dart';
 
 const MethodChannel _nativeChannel = MethodChannel('com.TGNF.tunnel_controller/native');
@@ -125,8 +124,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
   final ScrollController _logScrollController = ScrollController();
   late SharedPreferences _prefs;
+  final _secureStorage = const FlutterSecureStorage();
 
-  // Danh sách arguments đầy đủ để hiển thị
+  // Debounce timer cho _saveState
+  Timer? _saveTimer;
+
+  // Danh sách arguments
   final List<Map<String, String>> _allArguments = [
     {'flag': '--output', 'desc': 'Output format for logs (default, json)'},
     {'flag': '--proxy-dns', 'desc': 'Enable DNS proxy'},
@@ -163,13 +166,18 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   }
 
   void _saveState() {
-    _prefs.setString('tunnel_log', _log);
-    _prefs.setString('tunnel_url', _tunnelUrl);
-    _prefs.setInt('tunnel_pid', _tunnelPid ?? -1);
-    _prefs.setBool('tunnel_is_running', _isRunning);
+    // Debounce: nếu gọi liên tục thì chỉ lưu sau 2 giây kể từ lần cuối
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(seconds: 2), () {
+      _prefs.setString('tunnel_log', _log);
+      _prefs.setString('tunnel_url', _tunnelUrl);
+      _prefs.setInt('tunnel_pid', _tunnelPid ?? -1);
+      _prefs.setBool('tunnel_is_running', _isRunning);
+    });
   }
 
   void _clearState() {
+    _saveTimer?.cancel();
     _prefs.remove('tunnel_log');
     _prefs.remove('tunnel_url');
     _prefs.remove('tunnel_pid');
@@ -232,55 +240,34 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   void dispose() {
     _stopTunnel();
     _systemTimer?.cancel();
+    _saveTimer?.cancel();
     _logScrollController.dispose();
     super.dispose();
   }
 
+  // ----- KHÔNG CÒN FALLBACK, CHỈ LẤY BINARY TỪ NATIVE DIR -----
   Future<void> _initBinary() async {
     try {
-      String? nativeDir;
-      try {
-        nativeDir = await _nativeChannel.invokeMethod('getNativeLibraryDir');
-      } catch (e) {
-        _appendLog('⚠️ Cannot get native dir, fallback...');
+      final String? nativeDir = await _nativeChannel.invokeMethod('getNativeLibraryDir');
+      if (nativeDir == null || nativeDir.isEmpty) {
+        _appendLog('❌ Cannot get native library directory');
+        return;
       }
+      _nativeDir = nativeDir;
+      _displayNativeDir = _getDisplayNativeDir(nativeDir);
+      _appendLog('📁 Native dir: $_displayNativeDir');
 
-      if (nativeDir != null && nativeDir.isNotEmpty) {
-        _nativeDir = nativeDir;
-        _displayNativeDir = _getDisplayNativeDir(nativeDir);
-        _appendLog('📁 Native dir: $_displayNativeDir');
-
-        final String cfPath = '$nativeDir/libcloudflared.so';
-        if (File(cfPath).existsSync()) {
-          await Process.run('chmod', ['755', cfPath]);
-          _cloudflaredPath = cfPath;
-          _appendLog('✅ Cloudflared ready');
-          setState(() => _binaryReady = true);
-          return;
-        }
+      final String cfPath = '$nativeDir/libcloudflared.so';
+      if (!File(cfPath).existsSync()) {
+        _appendLog('❌ libcloudflared.so not found in native dir');
+        return;
       }
-
-      await _fallbackInitBinary();
+      await Process.run('chmod', ['755', cfPath]);
+      _cloudflaredPath = cfPath;
+      _appendLog('✅ Cloudflared ready');
+      setState(() => _binaryReady = true);
     } catch (e) {
       _appendLog('❌ Init binary error: $e');
-      await _fallbackInitBinary();
-    }
-  }
-
-  Future<void> _fallbackInitBinary() async {
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final String cfPath = '${dir.path}/cloudflared';
-      if (!File(cfPath).existsSync()) {
-        final data = await rootBundle.load('assets/cloudflared');
-        await File(cfPath).writeAsBytes(data.buffer.asUint8List(), flush: true);
-        await Process.run('chmod', ['755', cfPath]);
-      }
-      _cloudflaredPath = cfPath;
-      setState(() => _binaryReady = true);
-      _appendLog('✅ Cloudflared ready (fallback)');
-    } catch (e) {
-      _appendLog('❌ Fallback failed: $e');
     }
   }
 
@@ -309,7 +296,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
   void _appendLog(String msg) {
     setState(() => _log += '\n$msg');
-    _saveState();
+    _saveState(); // gọi debounce
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_logScrollController.hasClients) {
         _logScrollController.animateTo(
@@ -468,6 +455,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     _saveState();
     setState(() {});
 
+    // Khởi động foreground service trước
     try {
       final started = await FlutterForegroundTask.startService(
         notificationTitle: 'Tunnel is running',
@@ -484,19 +472,29 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     final port = int.tryParse(_portController.text.trim()) ?? 8080;
     List<String> args = [];
 
+    String? token;
     if (_useTryMode) {
       args.addAll(['tunnel', '--url', 'http://localhost:$port']);
       _appendLog('🚀 Starting Try Cloudflared on port $port');
     } else {
-      final token = _tokenController.text.trim();
-      if (token.isEmpty) {
-        _appendLog('❌ Please enter Token');
-        return;
+      // Lấy token từ secure storage hoặc từ text field
+      token = await _secureStorage.read(key: 'tunnel_token');
+      if (token == null || token.isEmpty) {
+        token = _tokenController.text.trim();
+        if (token.isEmpty) {
+          _appendLog('❌ Please enter Token');
+          // Dừng service nếu đã start
+          await FlutterForegroundTask.stopService();
+          return;
+        }
+        // Lưu token đã mã hóa
+        await _secureStorage.write(key: 'tunnel_token', value: token);
       }
-      args.addAll(['tunnel', 'run', '--token', token]);
+      args.addAll(['tunnel', 'run', '--token', token!]);
       _appendLog('🔑 Starting tunnel with token');
     }
 
+    // Custom args
     if (_customArgsController.text.trim().isNotEmpty) {
       final customArgs = _customArgsController.text.trim().split(' ');
       args.addAll(customArgs);
@@ -610,6 +608,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         }
       });
 
+      // Lắng nghe exit code và reset process
       _process!.exitCode.then((code) {
         if (mounted) {
           if (code == -13) {
@@ -620,6 +619,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           setState(() {
             _isRunning = false;
             _tunnelPid = null;
+            _process = null; // reset process
           });
           FlutterForegroundTask.stopService();
           _clearState();
@@ -627,8 +627,14 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       });
     } catch (e) {
       _appendLog('❌ Error starting: $e');
-      FlutterForegroundTask.stopService();
+      // Dừng foreground service và reset state
+      await FlutterForegroundTask.stopService();
       _clearState();
+      setState(() {
+        _isRunning = false;
+        _tunnelPid = null;
+        _process = null;
+      });
     }
   }
 
@@ -640,6 +646,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       setState(() {
         _isRunning = false;
         _tunnelPid = null;
+        _process = null;
         _tunnelUrl = '';
         _log = '📁 Native dir: $_displayNativeDir\n✅ Cloudflared ready\n✅ Log cleared';
       });
@@ -671,7 +678,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        // Nút menu 3 gạch ngang được đặt ở bên trái
         leading: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
           onSelected: (value) {
@@ -791,7 +797,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                                 maxLines: 2,
                               ),
                             ] else ...[
-                              // Try Mode: hiển thị Local Port
                               const SizedBox(height: 12),
                               TextField(
                                 controller: _portController,
