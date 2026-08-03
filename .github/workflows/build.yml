@@ -67,7 +67,7 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           mkdir -p android/app
-          echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > android/app/upload-keystore.jks
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
           
           if [ ! -s android/app/upload-keystore.jks ]; then
             echo "❌ Keystore file is empty!"
@@ -91,7 +91,7 @@ jobs:
           EOF
           echo "✅ key.properties created"
 
-      - name: Build cloudflared for Android (all architectures)
+      - name: Build cloudflared
         run: |
           git clone https://github.com/cloudflare/cloudflared.git --depth=1
           cd cloudflared
@@ -108,7 +108,6 @@ jobs:
             export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CC_ARCH"
             export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CXX_ARCH"
             go build -ldflags="-s -w" -o cloudflared ./cmd/cloudflared
-            file cloudflared
             mkdir -p ../output/$OUTPUT_DIR
             cp cloudflared ../output/$OUTPUT_DIR/libcloudflared.so
             chmod +x ../output/$OUTPUT_DIR/libcloudflared.so
@@ -118,13 +117,13 @@ jobs:
           build_arch "arm" "armv7a-linux-androideabi21-clang" "armv7a-linux-androideabi21-clang++" "armeabi-v7a"
           build_arch "amd64" "x86_64-linux-android21-clang" "x86_64-linux-android21-clang++" "x86_64"
           
-          echo "✅ Build completed for all architectures."
+          echo "✅ Build completed"
 
-      - name: Update Kotlin version
+      - name: Update Kotlin to 1.8.22
         run: |
           cat > android/build.gradle << 'EOF'
           buildscript {
-              ext.kotlin_version = '1.9.22'
+              ext.kotlin_version = '1.8.22'
               repositories {
                   google()
                   mavenCentral()
@@ -152,20 +151,18 @@ jobs:
           }
           EOF
 
-      - name: Create Flutter project and copy sources
+      - name: Copy sources to Flutter project
         run: |
           SOURCE_DIR=$PWD
-          
           mkdir -p /tmp/source_backup
-          cp -r $SOURCE_DIR/lib /tmp/source_backup/ 2>/dev/null || echo "No lib folder"
-          cp $SOURCE_DIR/pubspec.yaml /tmp/source_backup/ 2>/dev/null || echo "No pubspec.yaml"
+          cp -r $SOURCE_DIR/lib /tmp/source_backup/ 2>/dev/null || echo "No lib"
+          cp $SOURCE_DIR/pubspec.yaml /tmp/source_backup/ 2>/dev/null || echo "No pubspec"
           
           flutter create --org com.TGNF --project-name tunnel_controller /tmp/tunnel_temp
-          
           rsync -av --exclude='.git' /tmp/tunnel_temp/ ./
           
-          cp -r /tmp/source_backup/lib . 2>/dev/null || echo "No lib to copy"
-          cp /tmp/source_backup/pubspec.yaml . 2>/dev/null || echo "No pubspec.yaml to copy"
+          cp -r /tmp/source_backup/lib . 2>/dev/null || true
+          cp /tmp/source_backup/pubspec.yaml . 2>/dev/null || true
           
           for arch in arm64-v8a armeabi-v7a x86_64; do
             mkdir -p android/app/src/main/jniLibs/$arch
@@ -174,23 +171,18 @@ jobs:
           
           cp android/app/upload-keystore.jks android/app/ 2>/dev/null || true
           cp android/key.properties android/ 2>/dev/null || true
-          
-          echo "✅ All sources copied successfully!"
 
-      - name: Create MainActivity with MethodChannel
+      - name: Create MainActivity
         run: |
           mkdir -p android/app/src/main/kotlin/com/TGNF/tunnel_controller
           cat > android/app/src/main/kotlin/com/TGNF/tunnel_controller/MainActivity.kt << 'EOF'
           package com.TGNF.tunnel_controller
-
           import android.os.Bundle
           import io.flutter.embedding.android.FlutterActivity
           import io.flutter.embedding.engine.FlutterEngine
           import io.flutter.plugin.common.MethodChannel
-
           class MainActivity : FlutterActivity() {
               private val CHANNEL = "com.TGNF.tunnel_controller/native"
-
               override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
                   super.configureFlutterEngine(flutterEngine)
                   MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
@@ -203,45 +195,37 @@ jobs:
               }
           }
           EOF
-          echo "✅ MainActivity.kt created"
 
-      - name: Configure Android
+      - name: Configure Android app
         env:
           VERSION_NAME: ${{ env.VERSION_NAME }}
           VERSION_CODE: ${{ env.VERSION_CODE }}
         run: |
-          # Ghi đè build.gradle
           cat > android/app/build.gradle << EOF
           plugins {
               id "com.android.application"
               id "kotlin-android"
               id "dev.flutter.flutter-gradle-plugin"
           }
-
           def keystoreProperties = new Properties()
           def keystorePropertiesFile = rootProject.file("key.properties")
           if (keystorePropertiesFile.exists()) {
               keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
           }
-
           android {
               namespace "com.TGNF.tunnel_controller"
               compileSdkVersion 34
               ndkVersion flutter.ndkVersion
-
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
-
               kotlinOptions {
                   jvmTarget = '17'
               }
-
               sourceSets {
                   main.java.srcDirs += 'src/main/kotlin'
               }
-
               defaultConfig {
                   applicationId "com.TGNF.tunnel_controller"
                   minSdkVersion 21
@@ -249,7 +233,6 @@ jobs:
                   versionCode ${VERSION_CODE}
                   versionName "${VERSION_NAME}"
               }
-
               signingConfigs {
                   release {
                       keyAlias keystoreProperties.keyAlias
@@ -258,24 +241,20 @@ jobs:
                       storePassword keystoreProperties.storePassword
                   }
               }
-
               buildTypes {
                   release {
                       signingConfig signingConfigs.release
                   }
               }
-
               packagingOptions {
                   jniLibs {
                       useLegacyPackaging = true
                   }
               }
           }
-
           flutter {
               source '../..'
           }
-
           dependencies {}
           EOF
 
@@ -284,22 +263,19 @@ jobs:
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.TGNF.tunnel_controller">
-              
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
-                  android:allowBackup="true"
                   android:usesCleartextTraffic="true"
+                  android:allowBackup="true"
                   android:theme="@style/LaunchTheme">
-                  
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -308,49 +284,31 @@ jobs:
                       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
                       android:hardwareAccelerated="true"
                       android:windowSoftInputMode="adjustResize">
-                      
                       <meta-data
                           android:name="io.flutter.embedding.android.NormalTheme"
                           android:resource="@style/NormalTheme" />
-                          
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-                  
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
-
                   <service
                       android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
                       android:exported="false"
                       android:foregroundServiceType="dataSync"
                       android:stopWithTask="false" />
-                      
               </application>
           </manifest>
           EOF
-          
-          echo "✅ AndroidManifest.xml updated with ForegroundService"
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build APK (split per ABI)
+      - name: Build APK
         run: flutter build apk --release --split-per-abi
-
-      - name: Verify APK signature
-        run: |
-          echo "🔑 APK signature:"
-          for apk in build/app/outputs/flutter-apk/*.apk; do
-            echo "Checking $apk:"
-            keytool -printcert -jarfile "$apk" | grep "SHA-256" || echo "⚠️ APK built"
-          done
-          echo ""
-          echo "📱 APK files:"
-          ls -lh build/app/outputs/flutter-apk/*.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -358,11 +316,11 @@ jobs:
           name: tunnel-controller-apks
           path: build/app/outputs/flutter-apk/*.apk
 
-      - name: Commit version changes
+      - name: Commit version
         if: success()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add pubspec.yaml versioncode.txt
-          git commit -m "Bump version to $(grep 'version:' pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
+          git commit -m "Bump version [skip ci]" || echo "No changes"
           git push
