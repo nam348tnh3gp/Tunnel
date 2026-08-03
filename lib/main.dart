@@ -96,7 +96,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   bool _useTryMode = false;
   bool _isRunning = false;
 
-  // Advanced options
+  // Advanced options (chỉ flag hợp lệ)
   bool _useQuic = true;
   bool _usePostQuantum = false;
   bool _useMetrics = true;
@@ -105,7 +105,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   String _edgeIpVersion = 'auto';
   String _edgeBindAddress = '';
   String _label = '';
-  String _customHostname = '';
 
   Process? _process;
   StreamSubscription? _stdoutSub;
@@ -126,10 +125,9 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   late SharedPreferences _prefs;
   final _secureStorage = const FlutterSecureStorage();
 
-  // Debounce timer cho _saveState
   Timer? _saveTimer;
 
-  // Danh sách arguments
+  // Danh sách arguments hợp lệ (chỉ flag thực tế)
   final List<Map<String, String>> _allArguments = [
     {'flag': '--output', 'desc': 'Output format for logs (default, json)'},
     {'flag': '--proxy-dns', 'desc': 'Enable DNS proxy'},
@@ -146,7 +144,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
     {'flag': '--post-quantum', 'desc': 'Enable post-quantum secure tunnel'},
     {'flag': '--management-diagnostics', 'desc': 'Enable diagnostic routes'},
     {'flag': '--overwrite-dns', 'desc': 'Overwrite existing DNS records'},
-    {'flag': '--hostname', 'desc': 'Custom tunnel hostname'},
     {'flag': '--protocol', 'desc': 'Protocol {quic, http2}'},
     {'flag': '--no-tls-verify', 'desc': 'Disable TLS verification (insecure)'},
   ];
@@ -166,7 +163,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
   }
 
   void _saveState() {
-    // Debounce: nếu gọi liên tục thì chỉ lưu sau 2 giây kể từ lần cuối
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(seconds: 2), () {
       _prefs.setString('tunnel_log', _log);
@@ -296,7 +292,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
   void _appendLog(String msg) {
     setState(() => _log += '\n$msg');
-    _saveState(); // gọi debounce
+    _saveState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_logScrollController.hasClients) {
         _logScrollController.animateTo(
@@ -350,7 +346,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Version: 1.0.1', style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text('Version: 1.0.2', style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             const Text('Cloudflare Tunnel Controller for Android'),
             const SizedBox(height: 8),
@@ -477,21 +473,18 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       args.addAll(['tunnel', '--url', 'http://localhost:$port']);
       _appendLog('🚀 Starting Try Cloudflared on port $port');
     } else {
-      // Lấy token từ secure storage hoặc từ text field
       token = await _secureStorage.read(key: 'tunnel_token');
       if (token == null || token.isEmpty) {
         token = _tokenController.text.trim();
         if (token.isEmpty) {
           _appendLog('❌ Please enter Token');
-          // Dừng service nếu đã start
           await FlutterForegroundTask.stopService();
           return;
         }
-        // Lưu token đã mã hóa
         await _secureStorage.write(key: 'tunnel_token', value: token);
       }
-      // ✅ FIX: KHÔNG thêm 'run' – dùng trực tiếp 'tunnel --token ...'
-      args.addAll(['tunnel', 'run' ,'--token', token!]);
+      // ✅ Cấu trúc đúng: tunnel run --token <TOKEN> [flags]
+      args.addAll(['tunnel', 'run', '--token', token!]);
       _appendLog('🔑 Starting tunnel with token');
     }
 
@@ -500,6 +493,13 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       final customArgs = _customArgsController.text.trim().split(' ');
       args.addAll(customArgs);
       _appendLog('📝 Custom args: ${customArgs.join(' ')}');
+    }
+
+    // ✅ Flag --url (chỉ dùng nếu không có config ingress)
+    // Đã được thêm ở trên cho try mode, nhưng với token cũng cần --url
+    if (!_useTryMode) {
+      args.addAll(['--url', 'http://localhost:$port']);
+      _appendLog('📡 Using local URL: http://localhost:$port');
     }
 
     if (!_useQuic) {
@@ -547,11 +547,8 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       _appendLog('🏷️ Label: $_label');
     }
 
-    if (_customHostname.isNotEmpty) {
-      args.add('--hostname');
-      args.add(_customHostname);
-      _appendLog('🏷️ Hostname: $_customHostname');
-    }
+    // ❌ KHÔNG thêm --hostname (flag không tồn tại)
+    // Hostname được cấu hình trên Dashboard khi dùng token
 
     try {
       final Map<String, String> env = {
@@ -609,7 +606,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         }
       });
 
-      // Lắng nghe exit code và reset process
       _process!.exitCode.then((code) {
         if (mounted) {
           if (code == -13) {
@@ -620,7 +616,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
           setState(() {
             _isRunning = false;
             _tunnelPid = null;
-            _process = null; // reset process
+            _process = null;
           });
           FlutterForegroundTask.stopService();
           _clearState();
@@ -628,7 +624,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       });
     } catch (e) {
       _appendLog('❌ Error starting: $e');
-      // Dừng foreground service và reset state
       await FlutterForegroundTask.stopService();
       _clearState();
       setState(() {
@@ -941,17 +936,6 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
                                   ),
                                 ),
                               ],
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              decoration: InputDecoration(
-                                labelText: 'Custom Hostname',
-                                hintText: 'Custom tunnel hostname',
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              onChanged: (val) => setState(() => _customHostname = val),
                             ),
                             const SizedBox(height: 8),
                             TextField(
