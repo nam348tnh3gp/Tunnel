@@ -1,4 +1,4 @@
-name: Build Tunnel APK
+name: Build Tunnel Controller APK
 
 on:
   push:
@@ -30,12 +30,6 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      - name: Setup QEMU for ARM64
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-user-static binfmt-support
-          sudo update-binfmts --enable qemu-arm
-
       - name: Setup Android NDK
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
@@ -50,20 +44,20 @@ jobs:
           else
             VERSION_CODE=0
           fi
-          
+
           NEW_VERSION_CODE=$((VERSION_CODE + 1))
-          
+
           VERSION_NAME=$(grep 'version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
           if [ -z "$VERSION_NAME" ]; then
             VERSION_NAME="1.0.0"
           fi
-          
+
           NEW_VERSION="${VERSION_NAME}+${NEW_VERSION_CODE}"
-          
+
           sed -i "s/version: .*/version: $NEW_VERSION/" pubspec.yaml
-          
+
           echo $NEW_VERSION_CODE > versioncode.txt
-          
+
           echo "✅ Version set to: $NEW_VERSION"
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
           echo "VERSION_CODE=$NEW_VERSION_CODE" >> $GITHUB_ENV
@@ -74,12 +68,12 @@ jobs:
         run: |
           mkdir -p android/app
           echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > android/app/upload-keystore.jks
-          
+
           if [ ! -s android/app/upload-keystore.jks ]; then
             echo "❌ Keystore file is empty!"
             exit 1
           fi
-          
+
           echo "📏 Keystore size: $(wc -c < android/app/upload-keystore.jks) bytes"
           echo "✅ Keystore restored"
 
@@ -99,60 +93,65 @@ jobs:
 
       - name: Build cloudflared for Android (all architectures)
         run: |
+          SOURCE_DIR=$PWD
+          mkdir -p $SOURCE_DIR/output/{arm64-v8a,armeabi-v7a,x86_64,x86}
+
           git clone https://github.com/cloudflare/cloudflared.git --depth=1
           cd cloudflared
+
           build_arch() {
             local GOARCH=$1
             local CC_ARCH=$2
             local CXX_ARCH=$3
             local OUTPUT_DIR=$4
-            echo "Building for $GOARCH..."
+
+            echo "🔨 Building for $GOARCH ($OUTPUT_DIR)..."
             export GOOS=android
             export GOARCH=$GOARCH
             export CGO_ENABLED=1
             export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CC_ARCH"
             export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CXX_ARCH"
+
             go build -ldflags="-s -w" -o cloudflared ./cmd/cloudflared
             file cloudflared
             readelf -d cloudflared | grep NEEDED || echo "No dynamic dependencies"
-            mkdir -p ../output/$OUTPUT_DIR
-            cp cloudflared ../output/$OUTPUT_DIR/libcloudflared.so
-            chmod +x ../output/$OUTPUT_DIR/libcloudflared.so
+
+            cp cloudflared $SOURCE_DIR/output/$OUTPUT_DIR/libcloudflared.so
+            chmod +x $SOURCE_DIR/output/$OUTPUT_DIR/libcloudflared.so
           }
+
           build_arch "arm64" "aarch64-linux-android21-clang" "aarch64-linux-android21-clang++" "arm64-v8a"
-          build_arch "arm" "armv7a-linux-androideabi21-clang" "armv7a-linux-androideabi21-clang++" "armeabi-v7a"
+          build_arch "arm"   "armv7a-linux-androideabi21-clang" "armv7a-linux-androideabi21-clang++" "armeabi-v7a"
           build_arch "amd64" "x86_64-linux-android21-clang" "x86_64-linux-android21-clang++" "x86_64"
-          echo "Build completed for all architectures."
+          # For x86 (32-bit), use i686
+          build_arch "386"   "i686-linux-android21-clang" "i686-linux-android21-clang++" "x86"
+
+          echo "✅ Build completed for all architectures."
 
       - name: Create Flutter project and copy sources
         run: |
           SOURCE_DIR=$PWD
-          
-          # Backup current source (lib, pubspec, etc.) if any
+
           mkdir -p /tmp/source_backup
           cp -r $SOURCE_DIR/lib /tmp/source_backup/ 2>/dev/null || echo "No lib folder"
           cp $SOURCE_DIR/pubspec.yaml /tmp/source_backup/ 2>/dev/null || echo "No pubspec.yaml"
-          
-          # Create fresh Flutter project
+
           flutter create --org com.TGNF --project-name tunnel_controller /tmp/tunnel_temp
-          
-          # Copy project files to current directory (overwrite)
+
           rsync -av --exclude='.git' /tmp/tunnel_temp/ ./
-          
-          # Restore sources
+
           cp -r /tmp/source_backup/lib . 2>/dev/null || echo "No lib to copy"
           cp /tmp/source_backup/pubspec.yaml . 2>/dev/null || echo "No pubspec.yaml to copy"
-          
+
           # Copy native libraries
-          for arch in arm64-v8a armeabi-v7a x86_64; do
+          for arch in arm64-v8a armeabi-v7a x86_64 x86; do
             mkdir -p android/app/src/main/jniLibs/$arch
             cp $SOURCE_DIR/output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/ 2>/dev/null || true
           done
-          
-          # Restore keystore and key.properties
-          cp $SOURCE_DIR/android/app/upload-keystore.jks android/app/ 2>/dev/null || true
-          cp $SOURCE_DIR/android/key.properties android/ 2>/dev/null || true
-          
+
+          cp android/app/upload-keystore.jks android/app/ 2>/dev/null || true
+          cp android/key.properties android/ 2>/dev/null || true
+
           echo "✅ All sources copied successfully!"
 
       - name: Create MainActivity with MethodChannel
@@ -183,17 +182,15 @@ jobs:
           EOF
           echo "✅ MainActivity.kt created"
 
-      - name: Configure Android with signing and packaging
+      - name: Configure Android
         env:
           VERSION_NAME: ${{ env.VERSION_NAME }}
           VERSION_CODE: ${{ env.VERSION_CODE }}
         run: |
-          # Cập nhật applicationId, minSdk, targetSdk
-          sed -i 's/applicationId "com.example.*"/applicationId "com.TGNF.tunnel_controller"/' android/app/build.gradle
-          sed -i 's/minSdkVersion .*/minSdkVersion 21/' android/app/build.gradle
-          sed -i 's/targetSdkVersion .*/targetSdkVersion 34/' android/app/build.gradle
-          
-          # Ghi đè toàn bộ build.gradle với cấu hình đúng
+          # Cập nhật pubspec.yaml với phiên bản mới
+          sed -i "s/version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
+
+          # Ghi đè build.gradle với cấu hình signing
           cat > android/app/build.gradle << EOF
           plugins {
               id "com.android.application"
@@ -262,27 +259,22 @@ jobs:
           dependencies {}
           EOF
 
-      - name: Update Android Manifest
-        run: |
+          # Cập nhật AndroidManifest.xml
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.TGNF.tunnel_controller">
-              
+
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
               <application
                   android:label="Tunnel Controller"
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
-                  android:usesCleartextTraffic="true"
-                  android:allowBackup="true"
-                  android:theme="@style/LaunchTheme">
-                  
+                  android:usesCleartextTraffic="true">
+
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -291,17 +283,17 @@ jobs:
                       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
                       android:hardwareAccelerated="true"
                       android:windowSoftInputMode="adjustResize">
-                      
+
                       <meta-data
                           android:name="io.flutter.embedding.android.NormalTheme"
                           android:resource="@style/NormalTheme" />
-                          
+
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-                  
+
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -311,55 +303,31 @@ jobs:
                       android:exported="false"
                       android:foregroundServiceType="dataSync"
                       android:stopWithTask="false" />
-                      
               </application>
           </manifest>
           EOF
-          
-          echo "✅ AndroidManifest.xml updated"
+
+          echo "✅ Android configured"
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build APK (split per ABI)
-        run: flutter build apk --release --split-per-abi
+      - name: Build APK (universal)
+        run: flutter build apk --release
 
       - name: Verify APK signature
         run: |
-          echo "🔑 APK signatures:"
-          for apk in build/app/outputs/flutter-apk/*.apk; do
-            echo "Checking $apk"
-            keytool -printcert -jarfile "$apk" | grep "SHA-256" || echo "⚠️ APK built successfully"
-          done
+          echo "🔑 APK signature:"
+          keytool -printcert -jarfile build/app/outputs/flutter-apk/app-release.apk | grep "SHA-256" || echo "⚠️ APK built successfully"
           echo ""
-          echo "📱 APK file sizes:"
-          ls -lh build/app/outputs/flutter-apk/*.apk
+          echo "📱 APK file size:"
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
 
-      - name: Zip each APK with ABI name
-        run: |
-          cd build/app/outputs/flutter-apk
-          sudo apt-get install -y zip || true
-          echo "Available APKs:"
-          ls -la *.apk
-          for apk in *.apk; do
-            [ -f "$apk" ] || continue
-            case "$apk" in
-              *arm64-v8a*) zipname="aarch64.zip" ;;
-              *armeabi-v7a*) zipname="armv7a.zip" ;;
-              *x86_64*) zipname="x86_64.zip" ;;
-              *)
-                zipname="${apk%.apk}.zip"
-                ;;
-            esac
-            echo "Creating $zipname from $apk"
-            zip "$zipname" "$apk"
-          done
-
-      - name: Upload APK ZIPs
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: tunnel-apks
-          path: build/app/outputs/flutter-apk/*.zip
+          name: tunnel-controller-apk
+          path: build/app/outputs/flutter-apk/*.apk
 
       - name: Commit version changes
         if: success()
