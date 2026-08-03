@@ -44,20 +44,20 @@ jobs:
           else
             VERSION_CODE=0
           fi
-
+          
           NEW_VERSION_CODE=$((VERSION_CODE + 1))
-
+          
           VERSION_NAME=$(grep 'version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
           if [ -z "$VERSION_NAME" ]; then
             VERSION_NAME="1.0.0"
           fi
-
+          
           NEW_VERSION="${VERSION_NAME}+${NEW_VERSION_CODE}"
-
+          
           sed -i "s/version: .*/version: $NEW_VERSION/" pubspec.yaml
-
+          
           echo $NEW_VERSION_CODE > versioncode.txt
-
+          
           echo "✅ Version set to: $NEW_VERSION"
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
           echo "VERSION_CODE=$NEW_VERSION_CODE" >> $GITHUB_ENV
@@ -68,12 +68,12 @@ jobs:
         run: |
           mkdir -p android/app
           echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > android/app/upload-keystore.jks
-
+          
           if [ ! -s android/app/upload-keystore.jks ]; then
             echo "❌ Keystore file is empty!"
             exit 1
           fi
-
+          
           echo "📏 Keystore size: $(wc -c < android/app/upload-keystore.jks) bytes"
           echo "✅ Keystore restored"
 
@@ -95,63 +95,62 @@ jobs:
         run: |
           SOURCE_DIR=$PWD
           mkdir -p $SOURCE_DIR/output/{arm64-v8a,armeabi-v7a,x86_64,x86}
-
+          
           git clone https://github.com/cloudflare/cloudflared.git --depth=1
           cd cloudflared
-
+          
           build_arch() {
             local GOARCH=$1
             local CC_ARCH=$2
             local CXX_ARCH=$3
             local OUTPUT_DIR=$4
-
+            
             echo "🔨 Building for $GOARCH ($OUTPUT_DIR)..."
             export GOOS=android
             export GOARCH=$GOARCH
             export CGO_ENABLED=1
             export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CC_ARCH"
             export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CXX_ARCH"
-
+            
             go build -ldflags="-s -w" -o cloudflared ./cmd/cloudflared
             file cloudflared
             readelf -d cloudflared | grep NEEDED || echo "No dynamic dependencies"
-
+            
             cp cloudflared $SOURCE_DIR/output/$OUTPUT_DIR/libcloudflared.so
             chmod +x $SOURCE_DIR/output/$OUTPUT_DIR/libcloudflared.so
           }
-
+          
           build_arch "arm64" "aarch64-linux-android21-clang" "aarch64-linux-android21-clang++" "arm64-v8a"
           build_arch "arm"   "armv7a-linux-androideabi21-clang" "armv7a-linux-androideabi21-clang++" "armeabi-v7a"
           build_arch "amd64" "x86_64-linux-android21-clang" "x86_64-linux-android21-clang++" "x86_64"
-          # For x86 (32-bit), use i686
           build_arch "386"   "i686-linux-android21-clang" "i686-linux-android21-clang++" "x86"
-
+          
           echo "✅ Build completed for all architectures."
 
       - name: Create Flutter project and copy sources
         run: |
           SOURCE_DIR=$PWD
-
+          
           mkdir -p /tmp/source_backup
           cp -r $SOURCE_DIR/lib /tmp/source_backup/ 2>/dev/null || echo "No lib folder"
           cp $SOURCE_DIR/pubspec.yaml /tmp/source_backup/ 2>/dev/null || echo "No pubspec.yaml"
-
+          
           flutter create --org com.TGNF --project-name tunnel_controller /tmp/tunnel_temp
-
+          
           rsync -av --exclude='.git' /tmp/tunnel_temp/ ./
-
+          
           cp -r /tmp/source_backup/lib . 2>/dev/null || echo "No lib to copy"
           cp /tmp/source_backup/pubspec.yaml . 2>/dev/null || echo "No pubspec.yaml to copy"
-
+          
           # Copy native libraries
           for arch in arm64-v8a armeabi-v7a x86_64 x86; do
             mkdir -p android/app/src/main/jniLibs/$arch
             cp $SOURCE_DIR/output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/ 2>/dev/null || true
           done
-
+          
           cp android/app/upload-keystore.jks android/app/ 2>/dev/null || true
           cp android/key.properties android/ 2>/dev/null || true
-
+          
           echo "✅ All sources copied successfully!"
 
       - name: Create MainActivity with MethodChannel
@@ -183,14 +182,38 @@ jobs:
           echo "✅ MainActivity.kt created"
 
       - name: Configure Android
+        run: |
+          # Cập nhật applicationId, minSdk, targetSdk
+          sed -i 's/applicationId "com.example.*"/applicationId "com.TGNF.tunnel_controller"/' android/app/build.gradle
+          sed -i 's/minSdkVersion .*/minSdkVersion 21/' android/app/build.gradle
+          sed -i 's/targetSdkVersion .*/targetSdkVersion 34/' android/app/build.gradle
+          
+          # Thêm packagingOptions nếu chưa có
+          if ! grep -q "packagingOptions" android/app/build.gradle; then
+            sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
+          fi
+          
+          # Thêm signingConfigs
+          if ! grep -q "signingConfigs" android/app/build.gradle; then
+            sed -i '/android {/a \    signingConfigs {\n        release {\n            keyAlias keystoreProperties.keyAlias\n            keyPassword keystoreProperties.keyPassword\n            storeFile file(keystoreProperties.storeFile)\n            storePassword keystoreProperties.storePassword\n        }\n    }' android/app/build.gradle
+          fi
+          
+          # Thêm signingConfig vào release build
+          if grep -q "buildTypes {" android/app/build.gradle; then
+            if ! grep -q "signingConfig signingConfigs.release" android/app/build.gradle; then
+              sed -i '/release {/a \            signingConfig signingConfigs.release' android/app/build.gradle
+            fi
+          fi
+
+      - name: Add keystore properties
         env:
           VERSION_NAME: ${{ env.VERSION_NAME }}
           VERSION_CODE: ${{ env.VERSION_CODE }}
         run: |
-          # Cập nhật pubspec.yaml với phiên bản mới
+          # Cập nhật version trong pubspec.yaml
           sed -i "s/version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
-
-          # Ghi đè build.gradle với cấu hình signing
+          
+          # Ghi đè build.gradle
           cat > android/app/build.gradle << EOF
           plugins {
               id "com.android.application"
@@ -259,11 +282,12 @@ jobs:
           dependencies {}
           EOF
 
-          # Cập nhật AndroidManifest.xml
+      - name: Update Android Manifest
+        run: |
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.TGNF.tunnel_controller">
-
+              
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -274,7 +298,7 @@ jobs:
                   android:name="${applicationName}"
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true">
-
+                  
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -283,17 +307,17 @@ jobs:
                       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
                       android:hardwareAccelerated="true"
                       android:windowSoftInputMode="adjustResize">
-
+                      
                       <meta-data
                           android:name="io.flutter.embedding.android.NormalTheme"
                           android:resource="@style/NormalTheme" />
-
+                          
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-
+                  
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -303,16 +327,17 @@ jobs:
                       android:exported="false"
                       android:foregroundServiceType="dataSync"
                       android:stopWithTask="false" />
+                      
               </application>
           </manifest>
           EOF
-
-          echo "✅ Android configured"
+          
+          echo "✅ AndroidManifest.xml updated with ForegroundService"
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build APK (universal)
+      - name: Build APK (full architecture)
         run: flutter build apk --release
 
       - name: Verify APK signature
