@@ -120,7 +120,39 @@ jobs:
           
           echo "✅ Build completed for all architectures."
 
-      - name: Create Flutter project
+      - name: Update Kotlin version
+        run: |
+          cat > android/build.gradle << 'EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.22'
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:7.3.0'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.buildDir = '../build'
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+          tasks.register("clean", Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+
+      - name: Create Flutter project and copy sources
         run: |
           SOURCE_DIR=$PWD
           
@@ -137,7 +169,7 @@ jobs:
           
           for arch in arm64-v8a armeabi-v7a x86_64; do
             mkdir -p android/app/src/main/jniLibs/$arch
-            cp $SOURCE_DIR/output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/
+            cp $SOURCE_DIR/output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/ 2>/dev/null || true
           done
           
           cp android/app/upload-keystore.jks android/app/ 2>/dev/null || true
@@ -178,21 +210,7 @@ jobs:
           VERSION_NAME: ${{ env.VERSION_NAME }}
           VERSION_CODE: ${{ env.VERSION_CODE }}
         run: |
-          # Cập nhật applicationId, minSdk, targetSdk
-          sed -i 's/applicationId "com.example.*"/applicationId "com.TGNF.tunnel_controller"/' android/app/build.gradle
-          sed -i 's/minSdkVersion .*/minSdkVersion 21/' android/app/build.gradle
-          sed -i 's/targetSdkVersion .*/targetSdkVersion 34/' android/app/build.gradle
-          
-          # Thêm packagingOptions
-          if ! grep -q "packagingOptions" android/app/build.gradle; then
-            sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
-          fi
-          
-          # Cập nhật version
-          sed -i "s/versionName .*/versionName \"${VERSION_NAME}\"/" android/app/build.gradle
-          sed -i "s/versionCode .*/versionCode ${VERSION_CODE}/" android/app/build.gradle
-          
-          # Ghi đè build.gradle đầy đủ
+          # Ghi đè build.gradle
           cat > android/app/build.gradle << EOF
           plugins {
               id "com.android.application"
@@ -314,6 +332,8 @@ jobs:
               </application>
           </manifest>
           EOF
+          
+          echo "✅ AndroidManifest.xml updated with ForegroundService"
 
       - name: Install dependencies
         run: flutter pub get
