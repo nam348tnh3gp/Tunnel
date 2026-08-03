@@ -491,7 +491,7 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         await _secureStorage.write(key: 'tunnel_token', value: token);
       }
       // ✅ FIX: KHÔNG thêm 'run' – dùng trực tiếp 'tunnel --token ...'
-      args.addAll(['tunnel', '--token', token!]);
+      args.addAll(['tunnel', 'run' ,'--token', token!]);
       _appendLog('🔑 Starting tunnel with token');
     }
 
