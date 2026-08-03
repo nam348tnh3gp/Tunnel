@@ -107,6 +107,20 @@ jobs:
           EOF
           echo "✅ key.properties created"
 
+      # ---------- Kiểm tra keystore alias ----------
+      - name: Verify keystore alias
+        env:
+          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if ! keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PASS" -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "❌ Alias '$KEY_ALIAS' not found in keystore!"
+            echo "Available aliases:"
+            keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PASS" | grep -E "Alias name:" || true
+            exit 1
+          fi
+          echo "✅ Keystore alias verified"
+
       # ---------- Build cloudflared (native) ----------
       - name: Build cloudflared for Android (all architectures)
         run: |
@@ -153,7 +167,6 @@ jobs:
           mkdir -p /tmp/source_backup
           cp -r $SOURCE_DIR/lib /tmp/source_backup/ 2>/dev/null || echo "No lib folder"
           cp $SOURCE_DIR/pubspec.yaml /tmp/source_backup/ 2>/dev/null || echo "No pubspec.yaml"
-          # Backup thêm assets, resource nếu có
           cp -r $SOURCE_DIR/assets /tmp/source_backup/ 2>/dev/null || true
           
           flutter create --org com.TGNF --project-name tunnel_controller /tmp/tunnel_temp
@@ -172,7 +185,7 @@ jobs:
             cp $SOURCE_DIR/output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/ 2>/dev/null || true
           done
           
-          # Copy keystore đã giải mã
+          # Copy keystore và key.properties
           cp android/app/upload-keystore.jks android/app/ 2>/dev/null || true
           cp android/key.properties android/ 2>/dev/null || true
           
@@ -207,13 +220,25 @@ jobs:
           EOF
           echo "✅ MainActivity.kt created"
 
-      # ---------- Cấu hình Android (chỉ ghi đè một lần) ----------
+      # ---------- Cập nhật Kotlin version (sửa lỗi metadata) ----------
+      - name: Upgrade Kotlin version
+        run: |
+          # Kiểm tra và thay thế kotlin_version trong android/build.gradle
+          if grep -q 'ext.kotlin_version' android/build.gradle; then
+            sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.22"/' android/build.gradle
+          else
+            # Nếu không có, chèn vào đầu file
+            sed -i '1i ext.kotlin_version = "1.9.22"' android/build.gradle
+          fi
+          echo "✅ Kotlin version set to 1.9.22"
+
+      # ---------- Cấu hình Android (ghi đè build.gradle của app) ----------
       - name: Configure Android build
         env:
           VERSION_NAME: ${{ env.VERSION_NAME }}
           VERSION_CODE: ${{ env.VERSION_CODE }}
         run: |
-          # Ghi đè build.gradle với đầy đủ cấu hình, tránh dùng sed trước đó
+          # Ghi đè android/app/build.gradle với cấu hình đầy đủ
           cat > android/app/build.gradle << EOF
           plugins {
               id "com.android.application"
@@ -282,7 +307,7 @@ jobs:
           dependencies {}
           EOF
 
-          # Cập nhật pubspec.yaml với version mới (đề phòng bị ghi đè)
+          # Cập nhật pubspec.yaml version (đề phòng bị ghi đè)
           sed -i "s/version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
 
       # ---------- Cập nhật AndroidManifest ----------
