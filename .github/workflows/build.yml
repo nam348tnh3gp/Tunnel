@@ -18,6 +18,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # ---------- Cài đặt môi trường ----------
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
@@ -30,13 +31,27 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
+      # Cache NDK để tăng tốc
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v3
+        with:
+          path: android-ndk-r26c
+          key: ndk-26c-linux
+
       - name: Setup Android NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
           unzip -q android-ndk-r26c-linux.zip
+        continue-on-error: false
+
+      - name: Set NDK environment
+        run: |
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
           echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
+      # ---------- Quản lý phiên bản ----------
       - name: Increment version code
         run: |
           if [ -f versioncode.txt ]; then
@@ -62,6 +77,7 @@ jobs:
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
           echo "VERSION_CODE=$NEW_VERSION_CODE" >> $GITHUB_ENV
 
+      # ---------- Keystore ----------
       - name: Restore keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -77,43 +93,21 @@ jobs:
           echo "📏 Keystore size: $(wc -c < android/app/upload-keystore.jks) bytes"
           echo "✅ Keystore restored"
 
-      - name: Verify keystore and get alias
-        env:
-          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-        run: |
-          echo "🔍 Checking keystore validity..."
-          if ! keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PASS" > /dev/null 2>&1; then
-            echo "❌ Keystore invalid or wrong password!"
-            exit 1
-          fi
-          echo "✅ Keystore is valid"
-          
-          # Lấy alias đầu tiên từ keystore
-          ACTUAL_ALIAS=$(keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PASS" | grep -i "alias" | head -1 | awk '{print $NF}')
-          echo "Actual alias: $ACTUAL_ALIAS"
-          echo "ACTUAL_ALIAS=$ACTUAL_ALIAS" >> $GITHUB_ENV
-
-      - name: Create key.properties (auto-fix alias)
+      - name: Create key.properties
         env:
           STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASS: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          ACTUAL_ALIAS: ${{ env.ACTUAL_ALIAS }}
         run: |
-          # Nếu alias trong secret không khớp với alias thực tế, dùng alias thực tế
-          if [ -n "$ACTUAL_ALIAS" ] && [ "$KEY_ALIAS" != "$ACTUAL_ALIAS" ]; then
-            echo "⚠️ Alias mismatch: using actual alias '$ACTUAL_ALIAS' instead of '$KEY_ALIAS'"
-            KEY_ALIAS="$ACTUAL_ALIAS"
-          fi
-          
           cat > android/key.properties << EOF
           storePassword=$STORE_PASS
           keyPassword=$KEY_PASS
           keyAlias=$KEY_ALIAS
           storeFile=upload-keystore.jks
           EOF
-          echo "✅ key.properties created with alias: $KEY_ALIAS"
+          echo "✅ key.properties created"
 
+      # ---------- Build cloudflared (native) ----------
       - name: Build cloudflared for Android (all architectures)
         run: |
           SOURCE_DIR=$PWD
@@ -150,20 +144,27 @@ jobs:
           
           echo "✅ Build completed for all architectures."
 
+      # ---------- Tạo project Flutter và sao chép mã nguồn ----------
       - name: Create Flutter project and copy sources
         run: |
           SOURCE_DIR=$PWD
           
+          # Backup các file quan trọng
           mkdir -p /tmp/source_backup
           cp -r $SOURCE_DIR/lib /tmp/source_backup/ 2>/dev/null || echo "No lib folder"
           cp $SOURCE_DIR/pubspec.yaml /tmp/source_backup/ 2>/dev/null || echo "No pubspec.yaml"
+          # Backup thêm assets, resource nếu có
+          cp -r $SOURCE_DIR/assets /tmp/source_backup/ 2>/dev/null || true
           
           flutter create --org com.TGNF --project-name tunnel_controller /tmp/tunnel_temp
           
+          # Đồng bộ toàn bộ project mới (giữ cấu trúc chuẩn)
           rsync -av --exclude='.git' /tmp/tunnel_temp/ ./
           
+          # Khôi phục mã nguồn và tài nguyên
           cp -r /tmp/source_backup/lib . 2>/dev/null || echo "No lib to copy"
           cp /tmp/source_backup/pubspec.yaml . 2>/dev/null || echo "No pubspec.yaml to copy"
+          cp -r /tmp/source_backup/assets . 2>/dev/null || true
           
           # Copy native libraries
           for arch in arm64-v8a armeabi-v7a x86_64 x86; do
@@ -171,25 +172,13 @@ jobs:
             cp $SOURCE_DIR/output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/ 2>/dev/null || true
           done
           
+          # Copy keystore đã giải mã
           cp android/app/upload-keystore.jks android/app/ 2>/dev/null || true
           cp android/key.properties android/ 2>/dev/null || true
           
           echo "✅ All sources copied successfully!"
 
-      - name: Fix Kotlin version and Gradle wrapper
-        run: |
-          # Cập nhật Kotlin version lên 1.9.22
-          if grep -q "ext.kotlin_version" android/build.gradle; then
-            sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '"'"'1.9.22'"'"'/' android/build.gradle
-          else
-            sed -i '/buildscript {/a \    ext.kotlin_version = '"'"'1.9.22'"'"'' android/build.gradle
-          fi
-          
-          # Nâng Gradle wrapper lên 8.0
-          sed -i 's/distributionUrl=.*/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.0-all.zip/' android/gradle/wrapper/gradle-wrapper.properties
-          
-          echo "✅ Kotlin version set to 1.9.22, Gradle wrapper updated to 8.0"
-
+      # ---------- Tạo MainActivity (Kotlin) ----------
       - name: Create MainActivity with MethodChannel
         run: |
           mkdir -p android/app/src/main/kotlin/com/TGNF/tunnel_controller
@@ -218,39 +207,13 @@ jobs:
           EOF
           echo "✅ MainActivity.kt created"
 
-      - name: Configure Android
-        run: |
-          # Cập nhật applicationId, minSdk, targetSdk
-          sed -i 's/applicationId "com.example.*"/applicationId "com.TGNF.tunnel_controller"/' android/app/build.gradle
-          sed -i 's/minSdkVersion .*/minSdkVersion 21/' android/app/build.gradle
-          sed -i 's/targetSdkVersion .*/targetSdkVersion 34/' android/app/build.gradle
-          
-          # Thêm packagingOptions nếu chưa có
-          if ! grep -q "packagingOptions" android/app/build.gradle; then
-            sed -i '/android {/a \    packagingOptions {\n        jniLibs {\n            useLegacyPackaging = true\n        }\n    }' android/app/build.gradle
-          fi
-          
-          # Thêm signingConfigs
-          if ! grep -q "signingConfigs" android/app/build.gradle; then
-            sed -i '/android {/a \    signingConfigs {\n        release {\n            keyAlias keystoreProperties.keyAlias\n            keyPassword keystoreProperties.keyPassword\n            storeFile file(keystoreProperties.storeFile)\n            storePassword keystoreProperties.storePassword\n        }\n    }' android/app/build.gradle
-          fi
-          
-          # Thêm signingConfig vào release build
-          if grep -q "buildTypes {" android/app/build.gradle; then
-            if ! grep -q "signingConfig signingConfigs.release" android/app/build.gradle; then
-              sed -i '/release {/a \            signingConfig signingConfigs.release' android/app/build.gradle
-            fi
-          fi
-
-      - name: Add keystore properties and version
+      # ---------- Cấu hình Android (chỉ ghi đè một lần) ----------
+      - name: Configure Android build
         env:
           VERSION_NAME: ${{ env.VERSION_NAME }}
           VERSION_CODE: ${{ env.VERSION_CODE }}
         run: |
-          # Cập nhật version trong pubspec.yaml
-          sed -i "s/version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
-          
-          # Ghi đè build.gradle với cấu hình hoàn chỉnh
+          # Ghi đè build.gradle với đầy đủ cấu hình, tránh dùng sed trước đó
           cat > android/app/build.gradle << EOF
           plugins {
               id "com.android.application"
@@ -288,7 +251,6 @@ jobs:
                   targetSdkVersion 34
                   versionCode ${VERSION_CODE}
                   versionName "${VERSION_NAME}"
-                  multiDexEnabled true
               }
 
               signingConfigs {
@@ -317,11 +279,13 @@ jobs:
               source '../..'
           }
 
-          dependencies {
-              implementation 'androidx.multidex:multidex:2.0.1'
-          }
+          dependencies {}
           EOF
 
+          # Cập nhật pubspec.yaml với version mới (đề phòng bị ghi đè)
+          sed -i "s/version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
+
+      # ---------- Cập nhật AndroidManifest ----------
       - name: Update Android Manifest
         run: |
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
@@ -335,7 +299,7 @@ jobs:
 
               <application
                   android:label="Tunnel Controller"
-                  android:name="${applicationName}"
+                  android:name="android.app.Application"
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true">
                   
@@ -372,8 +336,9 @@ jobs:
           </manifest>
           EOF
           
-          echo "✅ AndroidManifest.xml updated with ForegroundService"
+          echo "✅ AndroidManifest.xml updated"
 
+      # ---------- Build APK ----------
       - name: Install dependencies
         run: flutter pub get
 
@@ -394,6 +359,7 @@ jobs:
           name: tunnel-controller-apk
           path: build/app/outputs/flutter-apk/*.apk
 
+      # ---------- Commit version ----------
       - name: Commit version changes
         if: success()
         run: |
