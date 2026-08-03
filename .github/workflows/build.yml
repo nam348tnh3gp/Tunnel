@@ -77,19 +77,42 @@ jobs:
           echo "📏 Keystore size: $(wc -c < android/app/upload-keystore.jks) bytes"
           echo "✅ Keystore restored"
 
-      - name: Create key.properties
+      - name: Verify keystore and get alias
+        env:
+          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          echo "🔍 Checking keystore validity..."
+          if ! keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PASS" > /dev/null 2>&1; then
+            echo "❌ Keystore invalid or wrong password!"
+            exit 1
+          fi
+          echo "✅ Keystore is valid"
+          
+          # Lấy alias đầu tiên từ keystore
+          ACTUAL_ALIAS=$(keytool -list -keystore android/app/upload-keystore.jks -storepass "$STORE_PASS" | grep -i "alias" | head -1 | awk '{print $NF}')
+          echo "Actual alias: $ACTUAL_ALIAS"
+          echo "ACTUAL_ALIAS=$ACTUAL_ALIAS" >> $GITHUB_ENV
+
+      - name: Create key.properties (auto-fix alias)
         env:
           STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_PASS: ${{ secrets.KEY_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          ACTUAL_ALIAS: ${{ env.ACTUAL_ALIAS }}
         run: |
+          # Nếu alias trong secret không khớp với alias thực tế, dùng alias thực tế
+          if [ -n "$ACTUAL_ALIAS" ] && [ "$KEY_ALIAS" != "$ACTUAL_ALIAS" ]; then
+            echo "⚠️ Alias mismatch: using actual alias '$ACTUAL_ALIAS' instead of '$KEY_ALIAS'"
+            KEY_ALIAS="$ACTUAL_ALIAS"
+          fi
+          
           cat > android/key.properties << EOF
           storePassword=$STORE_PASS
           keyPassword=$KEY_PASS
           keyAlias=$KEY_ALIAS
           storeFile=upload-keystore.jks
           EOF
-          echo "✅ key.properties created"
+          echo "✅ key.properties created with alias: $KEY_ALIAS"
 
       - name: Build cloudflared for Android (all architectures)
         run: |
@@ -153,6 +176,20 @@ jobs:
           
           echo "✅ All sources copied successfully!"
 
+      - name: Fix Kotlin version and Gradle wrapper
+        run: |
+          # Cập nhật Kotlin version lên 1.9.22
+          if grep -q "ext.kotlin_version" android/build.gradle; then
+            sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '"'"'1.9.22'"'"'/' android/build.gradle
+          else
+            sed -i '/buildscript {/a \    ext.kotlin_version = '"'"'1.9.22'"'"'' android/build.gradle
+          fi
+          
+          # Nâng Gradle wrapper lên 8.0
+          sed -i 's/distributionUrl=.*/distributionUrl=https\\:\\/\\/services.gradle.org\\/distributions\\/gradle-8.0-all.zip/' android/gradle/wrapper/gradle-wrapper.properties
+          
+          echo "✅ Kotlin version set to 1.9.22, Gradle wrapper updated to 8.0"
+
       - name: Create MainActivity with MethodChannel
         run: |
           mkdir -p android/app/src/main/kotlin/com/TGNF/tunnel_controller
@@ -205,7 +242,7 @@ jobs:
             fi
           fi
 
-      - name: Add keystore properties
+      - name: Add keystore properties and version
         env:
           VERSION_NAME: ${{ env.VERSION_NAME }}
           VERSION_CODE: ${{ env.VERSION_CODE }}
@@ -213,7 +250,7 @@ jobs:
           # Cập nhật version trong pubspec.yaml
           sed -i "s/version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
           
-          # Ghi đè build.gradle
+          # Ghi đè build.gradle với cấu hình hoàn chỉnh
           cat > android/app/build.gradle << EOF
           plugins {
               id "com.android.application"
@@ -251,6 +288,7 @@ jobs:
                   targetSdkVersion 34
                   versionCode ${VERSION_CODE}
                   versionName "${VERSION_NAME}"
+                  multiDexEnabled true
               }
 
               signingConfigs {
@@ -279,7 +317,9 @@ jobs:
               source '../..'
           }
 
-          dependencies {}
+          dependencies {
+              implementation 'androidx.multidex:multidex:2.0.1'
+          }
           EOF
 
       - name: Update Android Manifest
