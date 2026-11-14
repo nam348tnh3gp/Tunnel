@@ -91,7 +91,7 @@ class TunnelControlPage extends StatefulWidget {
 class _TunnelControlPageState extends State<TunnelControlPage> {
   // Basic controls
   final TextEditingController _tokenController = TextEditingController();
-  final TextEditingController _portController = TextEditingController(text: '8080');
+  final TextEditingController _portController = TextEditingController(text: '8000');
   final TextEditingController _customArgsController = TextEditingController();
   bool _useTryMode = false;
   bool _isRunning = false;
@@ -488,19 +488,28 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
       _appendLog('🔑 Starting tunnel with token');
     }
 
-    // Custom args
+    // Custom args — chặn --token để tránh trùng với token đã thêm ở trên
     if (_customArgsController.text.trim().isNotEmpty) {
-      final customArgs = _customArgsController.text.trim().split(' ');
+      final rawCustom = _customArgsController.text.trim();
+      if (rawCustom.contains('--token')) {
+        _appendLog('❌ Không được đặt --token trong custom args.');
+        _appendLog('   Dùng ô "Tunnel Token" phía trên thay vì thêm --token vào đây.');
+        await FlutterForegroundTask.stopService();
+        setState(() {
+          _isRunning = false;
+          _tunnelPid = null;
+          _process = null;
+        });
+        return;
+      }
+      final customArgs = rawCustom.split(' ');
       args.addAll(customArgs);
       _appendLog('📝 Custom args: ${customArgs.join(' ')}');
     }
 
-    // ✅ Flag --url (chỉ dùng nếu không có config ingress)
-    // Đã được thêm ở trên cho try mode, nhưng với token cũng cần --url
-    if (!_useTryMode) {
-      args.addAll(['--url', 'http://localhost:$port']);
-      _appendLog('📡 Using local URL: http://localhost:$port');
-    }
+    // ❌ KHÔNG thêm --url khi dùng token — tunnel run --token đã có ingress từ dashboard.
+    // Thêm --url sẽ chồng route cục bộ lên ingress và gây lỗi 1033.
+    // --url chỉ dùng cho quick tunnel (đã xử lý trong nhánh _useTryMode phía trên).
 
     if (!_useQuic) {
       args.add('--protocol');
@@ -574,36 +583,12 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
 
       _stdoutSub = _process!.stdout.transform(utf8.decoder).listen((data) {
         _appendLog('[OUT] $data');
-        final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
-        if (match != null) {
-          setState(() {
-            _tunnelUrl = match.group(0)!;
-          });
-          _appendLog('🔗 Public URL: $_tunnelUrl');
-          _saveState();
-          FlutterForegroundTask.updateService(
-            notificationTitle: 'Tunnel is running',
-            notificationText: _tunnelUrl,
-          );
-        }
+        _extractTunnelUrl(data);
       });
 
       _stderrSub = _process!.stderr.transform(utf8.decoder).listen((data) {
         _appendLog('[ERR] $data');
-        if (_tunnelUrl.isEmpty) {
-          final match = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
-          if (match != null) {
-            setState(() {
-              _tunnelUrl = match.group(0)!;
-            });
-            _appendLog('🔗 Public URL: $_tunnelUrl');
-            _saveState();
-            FlutterForegroundTask.updateService(
-              notificationTitle: 'Tunnel is running',
-              notificationText: _tunnelUrl,
-            );
-          }
-        }
+        _extractTunnelUrl(data);
       });
 
       _process!.exitCode.then((code) {
@@ -632,6 +617,37 @@ class _TunnelControlPageState extends State<TunnelControlPage> {
         _process = null;
       });
     }
+  }
+
+  /// Trích xuất URL public từ log cloudflared.
+  /// - Quick tunnel (try mode): https://xxx.trycloudflare.com
+  /// - Named tunnel (token mode): đọc hostname từ dòng "Updated to new configuration"
+  void _extractTunnelUrl(String data) {
+    if (_tunnelUrl.isNotEmpty) return;
+
+    // Quick tunnel
+    final quick = RegExp(r'https://[a-z0-9-]+\.trycloudflare\.com').firstMatch(data);
+    if (quick != null) {
+      _setTunnelUrl(quick.group(0)!);
+      return;
+    }
+
+    // Named tunnel: log chứa JSON escape như \"hostname\":\"n2062007.de5.net\"
+    final named = RegExp(r'\\"hostname\\":\\"([^\\"]+)\\"').firstMatch(data);
+    if (named != null) {
+      _setTunnelUrl('https://${named.group(1)!}');
+    }
+  }
+
+  void _setTunnelUrl(String url) {
+    if (_tunnelUrl == url) return;
+    setState(() => _tunnelUrl = url);
+    _appendLog('🔗 Public URL: $url');
+    _saveState();
+    FlutterForegroundTask.updateService(
+      notificationTitle: 'Tunnel is running',
+      notificationText: url,
+    );
   }
 
   void _stopTunnel() async {
