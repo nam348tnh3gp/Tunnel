@@ -1,6 +1,6 @@
 name: tunnel_controller
 description: Cloudflare Tunnel Controller
-version: 1.0.1-beta+2
+version: 1.0.1-beta+3
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
