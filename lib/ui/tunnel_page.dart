@@ -574,13 +574,20 @@ class _TunnelPageState extends State<TunnelPage> with WidgetsBindingObserver {
         children: [
           DropdownButtonFormField<String>(
             value: _config.protocol,
+            isExpanded: true,
             items: [
               for (final p in kProtocols)
-                DropdownMenuItem(value: p, child: Text(protoLabel(p))),
+                DropdownMenuItem(
+                  value: p,
+                  child: Text(protoLabel(p), overflow: TextOverflow.ellipsis),
+                ),
             ],
             onChanged: (v) => setState(
                 () => _apply(_config.copyWith(protocol: v ?? 'auto'))),
-            decoration: const InputDecoration(labelText: 'Protocol'),
+            decoration: const InputDecoration(
+              labelText: 'Protocol',
+              isDense: true,
+            ),
           ),
           SwitchListTile(
             title: const Text('Auto-restart on failure'),
@@ -616,46 +623,83 @@ class _TunnelPageState extends State<TunnelPage> with WidgetsBindingObserver {
             contentPadding: EdgeInsets.zero,
           ),
           const SizedBox(height: 8),
-          Row(children: [
-            Expanded(
-              child: TextField(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 420;
+              final regionField = TextField(
                 controller: _region,
                 decoration: const InputDecoration(
-                    labelText: 'Region', hintText: 'e.g. us'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: DropdownButtonFormField<String>(
+                  labelText: 'Region',
+                  hintText: 'e.g. us',
+                  isDense: true,
+                ),
+              );
+              final edgeField = DropdownButtonFormField<String>(
                 value: _config.edgeIpVersion,
+                isExpanded: true,
                 items: [
                   for (final v in kEdgeIpVersions)
-                    DropdownMenuItem(value: v, child: Text(edgeLabel(v))),
+                    DropdownMenuItem(
+                      value: v,
+                      child: Text(edgeLabel(v),
+                          overflow: TextOverflow.ellipsis),
+                    ),
                 ],
-                onChanged: (v) => setState(
-                    () => _apply(_config.copyWith(edgeIpVersion: v ?? 'auto'))),
-                decoration: const InputDecoration(labelText: 'Edge IP Ver'),
-              ),
-            ),
-          ]),
+                onChanged: (v) => setState(() =>
+                    _apply(_config.copyWith(edgeIpVersion: v ?? 'auto'))),
+                decoration: const InputDecoration(
+                  labelText: 'Edge IP Ver',
+                  isDense: true,
+                ),
+              );
+              if (wide) {
+                return Row(children: [
+                  Expanded(child: regionField),
+                  const SizedBox(width: 8),
+                  Expanded(child: edgeField),
+                ]);
+              }
+              return Column(children: [
+                regionField,
+                const SizedBox(height: 8),
+                edgeField,
+              ]);
+            },
+          ),
           const SizedBox(height: 8),
-          Row(children: [
-            Expanded(
-              child: TextField(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 420;
+              final bindField = TextField(
                 controller: _bind,
                 decoration: const InputDecoration(
-                    labelText: 'Edge Bind Address', hintText: 'IP address'),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: TextField(
+                  labelText: 'Edge Bind Address',
+                  hintText: 'IP address',
+                  isDense: true,
+                ),
+              );
+              final labelField = TextField(
                 controller: _label,
                 decoration: const InputDecoration(
-                    labelText: 'Label', hintText: 'Connector label'),
-              ),
-            ),
-          ]),
+                  labelText: 'Label',
+                  hintText: 'Connector label',
+                  isDense: true,
+                ),
+              );
+              if (wide) {
+                return Row(children: [
+                  Expanded(child: bindField),
+                  const SizedBox(width: 8),
+                  Expanded(child: labelField),
+                ]);
+              }
+              return Column(children: [
+                bindField,
+                const SizedBox(height: 8),
+                labelField,
+              ]);
+            },
+          ),
           const SizedBox(height: 8),
           TextField(
             controller: _custom,
@@ -663,6 +707,7 @@ class _TunnelPageState extends State<TunnelPage> with WidgetsBindingObserver {
             decoration: const InputDecoration(
               labelText: 'Additional arguments',
               hintText: 'e.g. --no-tls-verify --loglevel debug',
+              isDense: true,
             ),
           ),
         ],
