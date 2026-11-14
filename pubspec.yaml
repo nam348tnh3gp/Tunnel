@@ -1,6 +1,11 @@
 name: tunnel_controller
 description: Cloudflare Tunnel Controller
+<<<<<<< HEAD
 version: 1.0.1-beta+4
+=======
+publish_to: 'none'
+version: 1.1.0-beta+4
+>>>>>>> 4ddae1f (Upgrade toàn diện: runner, security, CI)
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -10,9 +15,9 @@ dependencies:
     sdk: flutter
 
   # Core
-  path_provider: ^2.1.0
   permission_handler: ^11.0.0
   device_info_ce: ^1.0.0
+  package_info_plus: ^8.0.0
 
   # Foreground service & WakeLock
   flutter_foreground_task: ^5.0.0
@@ -20,7 +25,7 @@ dependencies:
   shared_preferences: ^2.2.2
   url_launcher: ^6.3.0
 
-  # Secure storage (mã hóa token)
+  # Secure storage (encrypted token)
   flutter_secure_storage: ^9.0.0
 
 dev_dependencies:

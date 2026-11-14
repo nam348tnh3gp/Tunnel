@@ -3,7 +3,22 @@ name: Build Tunnel Controller APK
 on:
   push:
     branches: [ main, master ]
+    paths-ignore:
+      - '**.md'
+      - 'fastlane/**'
+      - 'LICENSE'
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      cloudflared_ref:
+        description: 'cloudflared tag/branch to build (empty = latest release tag)'
+        required: false
+        default: ''
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -18,9 +33,9 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---------- Cài đặt môi trường ----------
+      # ---------- Environment ----------
       - name: Setup Java
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -30,28 +45,91 @@ jobs:
         with:
           flutter-version: '3.22.0'
           channel: 'stable'
+          cache: true
 
-      # Cache NDK để tăng tốc
+      # ---------- cloudflared (pinned to a release tag, binaries cached) ----------
+      - name: Resolve cloudflared version
+        id: cf
+        env:
+          INPUT_REF: ${{ github.event.inputs.cloudflared_ref }}
+        run: |
+          REF="$INPUT_REF"
+          if [ -z "$REF" ]; then
+            REF=$(git ls-remote --tags --refs https://github.com/cloudflare/cloudflared.git \
+              | awk -F/ '{print $3}' | grep -E '^[0-9]{4}\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          fi
+          if [ -z "$REF" ]; then
+            echo "❌ Could not resolve a cloudflared version"
+            exit 1
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "📌 cloudflared $REF"
+
+      - name: Cache cloudflared binaries
+        id: cache-cf
+        uses: actions/cache@v4
+        with:
+          path: output
+          key: cloudflared-${{ steps.cf.outputs.ref }}-ndk26c-v1
+
+      - name: Clone cloudflared
+        if: steps.cache-cf.outputs.cache-hit != 'true'
+        env:
+          CF_REF: ${{ steps.cf.outputs.ref }}
+        run: git clone --depth 1 --branch "$CF_REF" https://github.com/cloudflare/cloudflared.git cloudflared
+
+      - name: Setup Go (version from cloudflared go.mod)
+        if: steps.cache-cf.outputs.cache-hit != 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: cloudflared/go.mod
+          cache-dependency-path: cloudflared/go.sum
+
       - name: Cache Android NDK
+        if: steps.cache-cf.outputs.cache-hit != 'true'
         id: cache-ndk
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: android-ndk-r26c
           key: ndk-26c-linux
 
       - name: Setup Android NDK
-        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        if: steps.cache-cf.outputs.cache-hit != 'true' && steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
           wget -q https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
           unzip -q android-ndk-r26c-linux.zip
-        continue-on-error: false
 
-      - name: Set NDK environment
+      - name: Build cloudflared for Android (all architectures)
+        if: steps.cache-cf.outputs.cache-hit != 'true'
+        env:
+          CF_REF: ${{ steps.cf.outputs.ref }}
         run: |
-          echo "ANDROID_NDK_HOME=$PWD/android-ndk-r26c" >> $GITHUB_ENV
-          echo "$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+          SOURCE_DIR=$PWD
+          NDK_BIN="$PWD/android-ndk-r26c/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p "$SOURCE_DIR"/output/arm64-v8a "$SOURCE_DIR"/output/armeabi-v7a "$SOURCE_DIR"/output/x86_64 "$SOURCE_DIR"/output/x86
+          cd cloudflared
 
-      # ---------- Quản lý phiên bản ----------
+          build_arch() {
+            local GOARCH=$1
+            local CC_ARCH=$2
+            local OUTPUT_DIR=$3
+            echo "🔨 Building for $GOARCH ($OUTPUT_DIR)..."
+            GOOS=android GOARCH=$GOARCH CGO_ENABLED=1 \
+              CC="$NDK_BIN/$CC_ARCH" CXX="$NDK_BIN/${CC_ARCH}++" \
+              go build -trimpath -ldflags="-s -w -X main.Version=$CF_REF" -o cloudflared ./cmd/cloudflared
+            file cloudflared
+            cp cloudflared "$SOURCE_DIR/output/$OUTPUT_DIR/libcloudflared.so"
+            chmod +x "$SOURCE_DIR/output/$OUTPUT_DIR/libcloudflared.so"
+          }
+
+          build_arch arm64 aarch64-linux-android21-clang   arm64-v8a
+          build_arch arm   armv7a-linux-androideabi21-clang armeabi-v7a
+          build_arch amd64 x86_64-linux-android21-clang    x86_64
+          build_arch 386   i686-linux-android21-clang      x86
+
+          echo "✅ Build completed for all architectures."
+
+      # ---------- Versioning ----------
       - name: Increment version code
         run: |
           if [ -f versioncode.txt ]; then
@@ -59,20 +137,18 @@ jobs:
           else
             VERSION_CODE=0
           fi
-          
+
           NEW_VERSION_CODE=$((VERSION_CODE + 1))
-          
+
           VERSION_NAME=$(grep 'version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
           if [ -z "$VERSION_NAME" ]; then
             VERSION_NAME="1.0.0"
           fi
-          
+
           NEW_VERSION="${VERSION_NAME}+${NEW_VERSION_CODE}"
-          
           sed -i "s/version: .*/version: $NEW_VERSION/" pubspec.yaml
-          
           echo $NEW_VERSION_CODE > versioncode.txt
-          
+
           echo "✅ Version set to: $NEW_VERSION"
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
           echo "VERSION_CODE=$NEW_VERSION_CODE" >> $GITHUB_ENV
@@ -84,12 +160,12 @@ jobs:
         run: |
           mkdir -p android/app
           echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > android/app/upload-keystore.jks
-          
+
           if [ ! -s android/app/upload-keystore.jks ]; then
             echo "❌ Keystore file is empty!"
             exit 1
           fi
-          
+
           echo "📏 Keystore size: $(wc -c < android/app/upload-keystore.jks) bytes"
           echo "✅ Keystore restored"
 
@@ -107,7 +183,6 @@ jobs:
           EOF
           echo "✅ key.properties created"
 
-      # ---------- Kiểm tra keystore alias ----------
       - name: Verify keystore alias
         env:
           STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -121,77 +196,25 @@ jobs:
           fi
           echo "✅ Keystore alias verified"
 
-      # ---------- Build cloudflared (native) ----------
-      - name: Build cloudflared for Android (all architectures)
-        run: |
-          SOURCE_DIR=$PWD
-          mkdir -p $SOURCE_DIR/output/{arm64-v8a,armeabi-v7a,x86_64,x86}
-          
-          git clone https://github.com/cloudflare/cloudflared.git --depth=1
-          cd cloudflared
-          
-          build_arch() {
-            local GOARCH=$1
-            local CC_ARCH=$2
-            local CXX_ARCH=$3
-            local OUTPUT_DIR=$4
-            
-            echo "🔨 Building for $GOARCH ($OUTPUT_DIR)..."
-            export GOOS=android
-            export GOARCH=$GOARCH
-            export CGO_ENABLED=1
-            export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CC_ARCH"
-            export CXX="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$CXX_ARCH"
-            
-            go build -ldflags="-s -w" -o cloudflared ./cmd/cloudflared
-            file cloudflared
-            readelf -d cloudflared | grep NEEDED || echo "No dynamic dependencies"
-            
-            cp cloudflared $SOURCE_DIR/output/$OUTPUT_DIR/libcloudflared.so
-            chmod +x $SOURCE_DIR/output/$OUTPUT_DIR/libcloudflared.so
-          }
-          
-          build_arch "arm64" "aarch64-linux-android21-clang" "aarch64-linux-android21-clang++" "arm64-v8a"
-          build_arch "arm"   "armv7a-linux-androideabi21-clang" "armv7a-linux-androideabi21-clang++" "armeabi-v7a"
-          build_arch "amd64" "x86_64-linux-android21-clang" "x86_64-linux-android21-clang++" "x86_64"
-          build_arch "386"   "i686-linux-android21-clang" "i686-linux-android21-clang++" "x86"
-          
-          echo "✅ Build completed for all architectures."
-
-      # ---------- Tạo project Flutter và sao chép mã nguồn ----------
+      # ---------- Flutter project scaffolding ----------
       - name: Create Flutter project and copy sources
         run: |
           SOURCE_DIR=$PWD
-          
-          # Backup các file quan trọng
-          mkdir -p /tmp/source_backup
-          cp -r $SOURCE_DIR/lib /tmp/source_backup/ 2>/dev/null || echo "No lib folder"
-          cp $SOURCE_DIR/pubspec.yaml /tmp/source_backup/ 2>/dev/null || echo "No pubspec.yaml"
-          cp -r $SOURCE_DIR/assets /tmp/source_backup/ 2>/dev/null || true
-          
           flutter create --org com.TGNF --project-name tunnel_controller /tmp/tunnel_temp
-          
-          # Đồng bộ toàn bộ project mới (giữ cấu trúc chuẩn)
-          rsync -av --exclude='.git' /tmp/tunnel_temp/ ./
-          
-          # Khôi phục mã nguồn và tài nguyên
-          cp -r /tmp/source_backup/lib . 2>/dev/null || echo "No lib to copy"
-          cp /tmp/source_backup/pubspec.yaml . 2>/dev/null || echo "No pubspec.yaml to copy"
-          cp -r /tmp/source_backup/assets . 2>/dev/null || true
-          
-          # Copy native libraries
+
+          # Add only what the repo does not already have; never overwrite repo files.
+          rsync -a --ignore-existing \
+            --exclude='.git' --exclude='/lib' --exclude='/test' \
+            --exclude='/README.md' --exclude='/pubspec.yaml' \
+            /tmp/tunnel_temp/ ./
+
           for arch in arm64-v8a armeabi-v7a x86_64 x86; do
             mkdir -p android/app/src/main/jniLibs/$arch
-            cp $SOURCE_DIR/output/$arch/libcloudflared.so android/app/src/main/jniLibs/$arch/ 2>/dev/null || true
+            cp "$SOURCE_DIR/output/$arch/libcloudflared.so" android/app/src/main/jniLibs/$arch/
           done
-          
-          # Copy keystore và key.properties
-          cp android/app/upload-keystore.jks android/app/ 2>/dev/null || true
-          cp android/key.properties android/ 2>/dev/null || true
-          
-          echo "✅ All sources copied successfully!"
 
-      # ---------- Tạo MainActivity (Kotlin) ----------
+          echo "✅ Project scaffolding ready"
+
       - name: Create MainActivity with MethodChannel
         run: |
           mkdir -p android/app/src/main/kotlin/com/TGNF/tunnel_controller
@@ -220,25 +243,24 @@ jobs:
           EOF
           echo "✅ MainActivity.kt created"
 
-      # ---------- Cập nhật Kotlin version (sửa lỗi metadata) ----------
       - name: Upgrade Kotlin version
         run: |
-          # Kiểm tra và thay thế kotlin_version trong android/build.gradle
           if grep -q 'ext.kotlin_version' android/build.gradle; then
             sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = "1.9.22"/' android/build.gradle
           else
-            # Nếu không có, chèn vào đầu file
             sed -i '1i ext.kotlin_version = "1.9.22"' android/build.gradle
+          fi
+          # Flutter 3.22 templates declare the Kotlin plugin version in settings.gradle
+          if [ -f android/settings.gradle ]; then
+            sed -i -E 's/(org\.jetbrains\.kotlin\.android" version )"[0-9.]+"/\1"1.9.22"/' android/settings.gradle
           fi
           echo "✅ Kotlin version set to 1.9.22"
 
-      # ---------- Cấu hình Android (ghi đè build.gradle của app) ----------
       - name: Configure Android build
         env:
           VERSION_NAME: ${{ env.VERSION_NAME }}
           VERSION_CODE: ${{ env.VERSION_CODE }}
         run: |
-          # Ghi đè android/app/build.gradle với cấu hình đầy đủ
           cat > android/app/build.gradle << EOF
           plugins {
               id "com.android.application"
@@ -307,27 +329,36 @@ jobs:
           dependencies {}
           EOF
 
-          # Cập nhật pubspec.yaml version (đề phòng bị ghi đè)
           sed -i "s/version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
 
-      # ---------- Cập nhật AndroidManifest ----------
       - name: Update Android Manifest
         run: |
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.TGNF.tunnel_controller">
-              
+
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.VIEW" />
+                      <data android:scheme="https" />
+                  </intent>
+              </queries>
 
               <application
                   android:label="Tunnel Controller"
                   android:name="android.app.Application"
                   android:icon="@mipmap/ic_launcher"
                   android:usesCleartextTraffic="true">
-                  
+
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
@@ -336,17 +367,17 @@ jobs:
                       android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
                       android:hardwareAccelerated="true"
                       android:windowSoftInputMode="adjustResize">
-                      
+
                       <meta-data
                           android:name="io.flutter.embedding.android.NormalTheme"
                           android:resource="@style/NormalTheme" />
-                          
+
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-                  
+
                   <meta-data
                       android:name="flutterEmbedding"
                       android:value="2" />
@@ -356,37 +387,44 @@ jobs:
                       android:exported="false"
                       android:foregroundServiceType="dataSync"
                       android:stopWithTask="false" />
-                      
+
               </application>
           </manifest>
           EOF
-          
           echo "✅ AndroidManifest.xml updated"
 
-      # ---------- Build APK ----------
+      # ---------- Quality gate + build ----------
       - name: Install dependencies
         run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Test
+        run: flutter test
 
       - name: Build APK (full architecture)
         run: flutter build apk --release
 
-      - name: Verify APK signature
+      - name: Verify APK signature and checksum
         run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
           echo "🔑 APK signature:"
-          keytool -printcert -jarfile build/app/outputs/flutter-apk/app-release.apk | grep "SHA-256" || echo "⚠️ APK built successfully"
-          echo ""
-          echo "📱 APK file size:"
-          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          keytool -printcert -jarfile "$APK" | grep "SHA-256" || echo "⚠️ APK built successfully"
+          ls -lh "$APK"
+          sha256sum "$APK" | tee "$APK.sha256sum"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: tunnel-controller-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            build/app/outputs/flutter-apk/*.sha256sum
 
-      # ---------- Commit version ----------
+      # ---------- Commit version (not on pull requests) ----------
       - name: Commit version changes
-        if: success()
+        if: success() && github.event_name != 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
