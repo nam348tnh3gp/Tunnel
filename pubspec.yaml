@@ -1,11 +1,7 @@
 name: tunnel_controller
 description: Cloudflare Tunnel Controller
 publish_to: 'none'
-<<<<<<< HEAD
-version: 1.1.0-beta+6
-=======
 version: 1.0.0
->>>>>>> 0911d07 (Update code mới nhất)
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
