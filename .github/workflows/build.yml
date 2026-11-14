@@ -16,9 +16,10 @@ on:
         required: false
         default: ''
 
+# Chỉ cancel PR; push để chạy tuần tự (tránh bot tự cancel)
 concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
+  group: build-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: write
@@ -26,6 +27,14 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Bỏ qua commit bump version của bot
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    outputs:
+      version_name: ${{ env.VERSION_NAME }}
+      version_code: ${{ env.VERSION_CODE }}
+      cloudflared_ref: ${{ steps.cf.outputs.ref }}
+      should_release: ${{ steps.check.outputs.should_release }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -129,8 +138,9 @@ jobs:
 
           echo "✅ Build completed for all architectures."
 
-      # ---------- Versioning ----------
+      # ---------- Versioning (chỉ bump khi không phải PR) ----------
       - name: Increment version code
+        if: github.event_name != 'pull_request'
         run: |
           if [ -f versioncode.txt ]; then
             VERSION_CODE=$(cat versioncode.txt | tr -d '\r')
@@ -152,6 +162,17 @@ jobs:
           echo "✅ Version set to: $NEW_VERSION"
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
           echo "VERSION_CODE=$NEW_VERSION_CODE" >> $GITHUB_ENV
+
+      - name: Read current version (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          VERSION_NAME=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
+          VERSION_CODE=$(grep -m1 '^version:' pubspec.yaml | sed 's/.*+//' | tr -d '\r')
+          [ -z "$VERSION_NAME" ] && VERSION_NAME="1.0.0"
+          [ -z "$VERSION_CODE" ] && VERSION_CODE="0"
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
+          echo "ℹ️ PR build — dùng version hiện tại ${VERSION_NAME}+${VERSION_CODE}"
 
       # ---------- Keystore ----------
       - name: Restore keystore
@@ -202,7 +223,6 @@ jobs:
           SOURCE_DIR=$PWD
           flutter create --org com.TGNF --project-name tunnel_controller /tmp/tunnel_temp
 
-          # Add only what the repo does not already have; never overwrite repo files.
           rsync -a --ignore-existing \
             --exclude='.git' --exclude='/lib' --exclude='/test' \
             --exclude='/README.md' --exclude='/pubspec.yaml' \
@@ -250,7 +270,6 @@ jobs:
           else
             sed -i '1i ext.kotlin_version = "1.9.22"' android/build.gradle
           fi
-          # Flutter 3.22 templates declare the Kotlin plugin version in settings.gradle
           if [ -f android/settings.gradle ]; then
             sed -i -E 's/(org\.jetbrains\.kotlin\.android" version )"[0-9.]+"/\1"1.9.22"/' android/settings.gradle
           fi
@@ -334,8 +353,7 @@ jobs:
       - name: Update Android Manifest
         run: |
           cat > android/app/src/main/AndroidManifest.xml << 'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.TGNF.tunnel_controller">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
               <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -401,7 +419,12 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Test
-        run: flutter test
+        run: |
+          if [ -d test ] && [ -n "$(ls -A test 2>/dev/null)" ]; then
+            flutter test
+          else
+            echo "⚠️ No tests found, skipping"
+          fi
 
       - name: Build APK (full architecture)
         run: flutter build apk --release
@@ -421,13 +444,87 @@ jobs:
           path: |
             build/app/outputs/flutter-apk/*.apk
             build/app/outputs/flutter-apk/*.sha256sum
+          retention-days: 90
 
-      # ---------- Commit version (not on pull requests) ----------
+      # ---------- Đánh dấu có release hay không ----------
+      - name: Mark release eligibility
+        id: check
+        if: github.event_name != 'pull_request'
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---------- Commit version (chỉ trên main/master) ----------
       - name: Commit version changes
-        if: success() && github.event_name != 'pull_request'
+        if: success() && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add pubspec.yaml versioncode.txt
           git commit -m "Bump version to $(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
           git push
+
+  # ================= RELEASE JOB =================
+  release:
+    needs: build
+    if: needs.build.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tunnel-controller-apk
+          path: dist
+
+      - name: List artifacts
+        run: ls -lh dist
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.build.outputs.version_code }}
+          CF_REF: ${{ needs.build.outputs.cloudflared_ref }}
+        run: |
+          TAG="v${VERSION_NAME}+${VERSION_CODE}"
+          echo "🏷️ Creating release $TAG"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "⚠️ Release $TAG đã tồn tại, xóa để tạo lại..."
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+
+          cat > RELEASE_NOTES.md <<EOF
+          **Automated release** từ commit \`${GITHUB_SHA::7}\`
+
+          - 📦 Version: \`${VERSION_NAME}+${VERSION_CODE}\`
+          - 🚀 cloudflared: \`${CF_REF}\`
+          - 🏗️ Kiến trúc: arm64-v8a, armeabi-v7a, x86_64, x86
+          - 🔐 Ký bằng release keystore
+
+          ### Files
+          - \`app-release.apk\` — APK full kiến trúc
+          - \`app-release.apk.sha256sum\` — checksum
+          EOF
+
+          gh release create "$TAG" \
+            --title "Tunnel Controller ${VERSION_NAME}+${VERSION_CODE}" \
+            --notes-file RELEASE_NOTES.md \
+            dist/*.apk dist/*.sha256sum
+
+          echo "✅ Đã publish release $TAG"
+
+      - name: Summary
+        env:
+          VERSION_NAME: ${{ needs.build.outputs.version_name }}
+          VERSION_CODE: ${{ needs.build.outputs.version_code }}
+        run: |
+          echo "### ✅ Đã release v${VERSION_NAME}+${VERSION_CODE}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "🔗 [Xem release](https://github.com/${{ github.repository }}/releases/tag/v${VERSION_NAME}+${VERSION_CODE})" >> "$GITHUB_STEP_SUMMARY"
