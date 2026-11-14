@@ -140,13 +140,13 @@ jobs:
 
           NEW_VERSION_CODE=$((VERSION_CODE + 1))
 
-          VERSION_NAME=$(grep 'version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
+          VERSION_NAME=$(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
           if [ -z "$VERSION_NAME" ]; then
             VERSION_NAME="1.0.0"
           fi
 
           NEW_VERSION="${VERSION_NAME}+${NEW_VERSION_CODE}"
-          sed -i "s/version: .*/version: $NEW_VERSION/" pubspec.yaml
+          sed -i "s/^version: .*/version: $NEW_VERSION/" pubspec.yaml
           echo $NEW_VERSION_CODE > versioncode.txt
 
           echo "✅ Version set to: $NEW_VERSION"
@@ -329,7 +329,7 @@ jobs:
           dependencies {}
           EOF
 
-          sed -i "s/version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
+          sed -i "s/^version: .*/version: ${VERSION_NAME}+${VERSION_CODE}/" pubspec.yaml
 
       - name: Update Android Manifest
         run: |
@@ -429,5 +429,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add pubspec.yaml versioncode.txt
-          git commit -m "Bump version to $(grep 'version:' pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
+          git commit -m "Bump version to $(grep -m1 '^version:' pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
           git push
