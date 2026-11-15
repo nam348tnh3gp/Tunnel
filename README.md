@@ -1,248 +1,223 @@
-## Tunnel Controller
+<div align="center">
+
+<img src="https://gor-mez8.onrender.com/render.gif?text=TUNNEL+CONTROLLER&effect=glitch&font=monobold&w=700&h=120&size=64&c1=ff2e88&bg=transparent&fps=15&dur=3&seed=7" alt="TUNNEL CONTROLLER" />
+
+<img src="https://gor-mez8.onrender.com/render.gif?text=Cloudflare+Tunnel+on+Android&effect=type&font=mono&w=700&h=50&size=26&c1=d6d3d1&bg=transparent&fps=15&dur=2.5&seed=7" alt="Cloudflare Tunnel on Android" />
 
 [![Build APK](https://github.com/nam348tnh3gp/Tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/nam348tnh3gp/Tunnel/actions/workflows/build.yml)
-[![Releases](https://img.shields.io/github/v/release/nam348tnh3gp/Tunnel?label=releases)](https://github.com/nam348tnh3gp/Tunnel/releases)
+[![Releases](https://img.shields.io/github/v/release/nam348tnh3gp/Tunnel?label=releases&include_prereleases)](https://github.com/nam348tnh3gp/Tunnel/releases)
 [![Flutter](https://img.shields.io/badge/flutter-3.22.0-blue?logo=flutter)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/dart-%3E%3D3.0.0-blue?logo=dart)](https://dart.dev)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/nam348tnh3gp/Tunnel/blob/main/LICENSE)
 
-A compact Flutter app to run Cloudflare Tunnel (cloudflared) on Android devices. The app supports a temporary "Try" mode and a persistent "Token" mode. Features foreground service support for background operation and state persistence across app restarts. The repository includes a CI pipeline that cross-compiles cloudflared for multiple architectures and packages them into a single APK.
+</div>
 
-Quick links
-- Repository: https://github.com/nam348tnh3gp/Tunnel
-- Main app: `lib/main.dart`
-- Task handler: `lib/tunnel_task_handler.dart`
-- CI workflow: `.github/workflows/build.yml`
-- Releases: https://github.com/nam348tnh3gp/Tunnel/releases
-- License: `LICENSE` (Apache-2.0)
+A compact Flutter app that runs Cloudflare Tunnel (`cloudflared`) on Android. It supports a temporary **Quick** mode and a persistent **Token** mode, keeps the tunnel alive in the background with a foreground service, remembers your settings, and restarts the tunnel automatically if it drops. The repository's CI cross-compiles `cloudflared` for every Android ABI and bundles it into the APK.
 
-Table of contents
+**Quick links:** [Repository](https://github.com/nam348tnh3gp/Tunnel) · [Releases](https://github.com/nam348tnh3gp/Tunnel/releases) · [Changelog](CHANGELOG.md) · [CI workflow](.github/workflows/build.yml) · License: Apache-2.0
+
+## Table of contents
 - [Key features](#key-features)
-- [What's new](#whats-new)
-- [How it works (overview)](#how-it-works-overview)
-- [Prebuilt APK (recommended)](#prebuilt-apk-recommended)
-- [Prerequisites](#prerequisites)
-- [Build & Run (local)](#build--run-local)
-- [Reproduce CI: build cloudflared](#reproduce-ci-build-cloudflared)
-- [CI / GitHub Actions](#ci--github-actions)
-- [Usage (in-app)](#usage-in-app)
+- [What's new in 1.0.0+2](#whats-new-in-100)
+- [Download](#download)
+- [Usage](#usage)
 - [Flags & mapping](#flags--mapping)
-- [Background Service](#background-service)
-- [State Persistence](#state-persistence)
+- [How it works](#how-it-works)
+- [Project layout](#project-layout)
+- [Build & run locally](#build--run-locally)
+- [CI & releases](#ci--releases)
 - [Troubleshooting](#troubleshooting)
 - [Security notes](#security-notes)
 - [Contributing](#contributing)
 - [License](#license)
 
 ## Key features
-- Simple UI to start/stop Cloudflare Tunnel on Android devices.
-- Two operation modes:
-  - Try mode — creates a temporary public URL pointing to a local port.
-  - Token mode — runs `tunnel run --token <TOKEN>` for persistent tunnels.
-- Multi-ABI support: CI builds cloudflared for arm64, armeabi-v7a, x86_64, x86 and packages them into `jniLibs` and `assets`.
-- Fallback binary: if native lib not found, the app extracts `assets/cloudflared` to app storage and executes it.
-- Live logs, automatic detection of trycloudflare public URLs, and basic device performance stats (CPU, temperature via `device_info_ce`).
-- Copy logs and public URL from the UI.
-- **Foreground service support** — tunnel continues running in background with persistent notification.
-- **State persistence** — app remembers tunnel status, logs, and public URL across app restarts.
-- **Automatic state recovery** — if the app is killed, it can restore the running tunnel session.
+- Start / stop a Cloudflare Tunnel from a simple UI.
+- **Two modes**
+  - **Quick (try)** — temporary public `https://<id>.trycloudflare.com` URL pointing at a local port.
+  - **Token** — `cloudflared tunnel run` with your tunnel token for a persistent tunnel.
+- **Foreground service + WakeLock** — keeps running with the screen off or the app minimised.
+- **Auto-restart** — exponential backoff (2 s → 60 s, up to 8 attempts, counter resets after a stable 2 minutes).
+- **Settings remembered** across launches; the token is stored encrypted (`flutter_secure_storage`) with show / hide / forget.
+- **Re-attach after app restart** — if cloudflared is still alive, Stop keeps working (PID verified through `/proc`).
+- Public URL auto-detected for both Quick and Token mode, with *Open in browser* and *Copy*.
+- Colour-coded live log (bounded to 1500 lines), copy / clear, CPU and temperature readout.
+- Input validation and quote-aware additional arguments.
+- Multi-ABI: `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86` binaries are built in CI and shipped as `libcloudflared.so`.
 
-## What's new
-- **Foreground Service (v1.0.1)**: Tunnel now runs as a foreground service, allowing continuous operation in the background.
-- **State Persistence**: SharedPreferences integration to save and restore tunnel state, logs, and public URLs.
-- **Background State Recovery**: App detects if tunnel was running before shutdown and recovers gracefully.
-- **Enhanced Notifications**: Live notifications show tunnel status and public URL with quick copy functionality.
-- **Improved UI**: Visual status indicators, emoji icons, and better layout for device performance metrics.
+## What's new in 1.0.0+2
+- 🔒 The token is passed through the `TUNNEL_TOKEN` environment variable, never on the command line, and token-shaped text is redacted from the log.
+- 🐛 Changing the token now takes effect (the old saved token used to win over the text field).
+- 🐛 Leaving the screen no longer stops the tunnel; Stop keeps the log and force-kills a stuck process after 5 s.
+- 🐛 Android 14 foreground-service permission added; notification permission is requested at runtime.
+- ✨ Persisted settings, auto-restart, protocol selector (Auto / QUIC / HTTP/2), battery-optimisation shortcut.
+- 🧪 Unit tests, `flutter analyze` in CI, and automated GitHub Releases on tags.
 
-## How it works (overview)
-- The Flutter UI (see `lib/main.dart`) collects user inputs and launches the native `cloudflared` binary as a subprocess on the device.
-- On initialization, the app attempts to get the Android native library directory via a MethodChannel. If `libcloudflared.so` exists in that directory it is used; otherwise `assets/cloudflared` is extracted to app storage.
-- The app starts a foreground service via `FlutterForegroundTask` to keep the tunnel alive in the background.
-- stdout/stderr are monitored for Try Cloudflare URLs (`https://<id>.trycloudflare.com`), which are shown in the UI when detected.
-- App state (logs, URL, PID, running status) is persisted to SharedPreferences after each update.
-- On app restart, `_restoreRunningState()` checks if the service is still alive and recovers the UI state accordingly.
-- The CI workflow cross-compiles cloudflared for each target ABI, injects the shared libraries into a generated Flutter app, and builds APK(s).
+Full details: [CHANGELOG.md](CHANGELOG.md).
 
-## Prebuilt APK (recommended)
-We provide prebuilt artifacts in Releases. Download the latest release and you will find an archive named `tunnel-apk.zip` which contains a single APK built to support all common ABIs (aarch32, aarch64, x86, x86_64).
+<div align="center">
+<img src="https://gor-mez8.onrender.com/render.gif?text=DOWNLOAD&effect=type&font=monobold&w=700&h=60&size=36&c1=ff2e88&bg=transparent&fps=15&dur=1.5&seed=7" alt="DOWNLOAD" />
+</div>
 
-Installation steps:
-1. Go to the Releases page: https://github.com/nam348tnh3gp/Tunnel/releases
-2. Download `tunnel-apk.zip`
-3. Unzip to extract the APK (e.g. `tunnel.apk`)
-4. Install:
-   - Via adb:
-     ```
-     adb install -r path/to/tunnel.apk
-     ```
-   - Or enable "Install unknown apps" on your device and open the APK with a file manager.
+## Download
+Grab the latest APK from the [Releases](https://github.com/nam348tnh3gp/Tunnel/releases) page. Each release contains:
 
-Notes:
-- The APK from CI may be unsigned or not Play-signed. For production distribution sign the APK with your key.
-- The bundled APK aims to include all ABIs, but some devices/firmwares might require a specific ABI build — test on your target device.
-- Foreground service requires Android 8.0+ for proper background operation.
+| File | For |
+| --- | --- |
+| `tunnel-controller-<tag>-arm64-v8a.apk` | Most modern phones (64-bit ARM) |
+| `tunnel-controller-<tag>-armeabi-v7a.apk` | Older 32-bit ARM devices |
+| `tunnel-controller-<tag>-x86_64.apk` | x86_64 devices / emulators |
+| `tunnel-controller-<tag>-universal.apk` | All of the above in one (larger) file |
+| `SHA256SUMS.txt` | Checksums for verification |
 
-## Prerequisites (for building locally)
-- Flutter (workflow tested with 3.22.0)
-- Java JDK 17
-- Android SDK and Android NDK (CI uses r26c)
-- Optional: Go toolchain (if you want to build cloudflared locally)
-- Physical Android device or emulator (emulator ABI must match binary)
+Check your device ABI with `adb shell getprop ro.product.cpu.abi`.
 
-## Build & Run (local)
-1. Clone:
-   ```
-   git clone https://github.com/nam348tnh3gp/Tunnel.git
-   cd Tunnel
-   ```
-2. Install dependencies:
-   ```
-   flutter pub get
-   ```
-3. (Optional) Provide native binaries:
-   - Place ABI-specific shared libs in:
-     ```
-     android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
-     android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
-     android/app/src/main/jniLibs/x86_64/libcloudflared.so
-     android/app/src/main/jniLibs/x86/libcloudflared.so
-     ```
-   - Or place a runnable binary in `assets/cloudflared` (app will extract at runtime).
-4. Run on device:
-   ```
-   flutter run
-   ```
-5. Build release APK:
-   ```
-   flutter build apk --release
-   ```
-   Output: `build/app/outputs/flutter-apk/app-release.apk`
-
-## Reproduce CI: build cloudflared (summary)
-CI clones https://github.com/cloudflare/cloudflared and builds per-ABI using CGO + Android NDK clang. Example steps used in CI:
-```bash
-export GOOS=android
-export GOARCH=<arm64|arm|amd64|386>
-export CGO_ENABLED=1
-export CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/<clang-target>"
-export CXX="...clang++"
-go build -ldflags='-s -w' -o cloudflared ./cmd/cloudflared
-# then copy to output/<abi>/libcloudflared.so
+Install:
 ```
-CI then creates a Flutter project, copies sources, injects `jniLibs/<abi>/libcloudflared.so`, copies arm64 into `assets/cloudflared`, and builds the APK.
+adb install -r tunnel-controller-<tag>-arm64-v8a.apk
+```
+or enable "Install unknown apps" and open the APK from a file manager. Verify the download with `sha256sum -c SHA256SUMS.txt`.
 
-## CI / GitHub Actions
-See `.github/workflows/build.yml`. High-level steps:
-1. Setup Java (Zulu JDK 17) and Flutter (3.22.0).
-2. Download Android NDK r26c; set `ANDROID_NDK_HOME`.
-3. Clone and cross-compile cloudflared for multiple ABIs.
-4. Scaffold Flutter project, inject native libs and assets, then `flutter build apk --release`.
-5. Upload APK artifacts.
+**Requirements:** Android 5.0 (API 21) or newer. Android 13+ will ask for notification permission (needed for the foreground-service notification).
 
-Triggers: push to `main`/`master`, manual dispatch.
+<div align="center">
+<img src="https://gor-mez8.onrender.com/render.gif?text=USAGE&effect=wave&font=monobold&w=700&h=60&size=36&c1=ff2e88&bg=transparent&fps=15&dur=2&seed=7" alt="USAGE" />
+</div>
 
-## Usage (in-app)
-- **Mode Selection**:
-  - Try Cloudflared: starts a temporary public URL (no token required).
-  - Token: enter your Cloudflare Tunnel token (runs `tunnel run --token <TOKEN>`).
-- **Basic Configuration**:
-  - Local port (default 8080) — the port your local service is running on.
-  - Custom arguments (space-separated) — additional cloudflared CLI flags.
-- **Advanced Options**:
-  - QUIC on/off — enable/disable QUIC protocol (HTTP/2 fallback available).
-  - Post-Quantum on/off — enable post-quantum cryptography.
-  - Metrics enabled/disabled — enable/disable tunnel metrics collection.
-  - Region — specify a Cloudflare region (e.g., hkg, sin, lax).
-  - Edge IP version — choose between Auto, IPv4, or IPv6.
-  - Custom hostname — bind tunnel to a custom hostname.
-- **Control & Monitoring**:
-  - Start/Stop buttons control the tunnel subprocess.
-  - Logs are streamed live to the UI.
-  - Try URLs are auto-detected and displayed in a copy-friendly card.
-  - CPU usage and device temperature are displayed in real-time.
-  - Running status indicator shows tunnel state at a glance.
+## Usage
+1. **Choose a mode**
+   - *Token*: paste your tunnel token. You can also paste the whole `cloudflared ... --token eyJ...` command; the token is extracted for you.
+   - *Quick (try)*: enter the local port your service listens on.
+2. (Optional) open **Advanced Options** and adjust protocol, region, etc.
+3. Tap **Start**. The status card shows the state (`Starting…`, `Running`, `Reconnecting…`), the PID, and the public URL once detected.
+4. Tap **Stop** to shut the tunnel down (SIGTERM, then SIGKILL after 5 s).
+
+Settings cannot be edited while the tunnel is running. The menu (⋮) has *About*, the list of supported arguments, a shortcut to disable battery optimisation, and the disclaimer.
+
+**Advanced options**
+
+| Option | Notes |
+| --- | --- |
+| Protocol | Auto (default), QUIC, or HTTP/2 |
+| Auto-restart on failure | Backoff 2 s → 60 s, max 8 attempts |
+| Post-Quantum | Enables post-quantum secure tunnel |
+| Management diagnostics | On by default; turn off to disable diagnostic routes |
+| Overwrite DNS | Overwrite existing DNS records |
+| Region / Edge IP version / Edge bind address / Label | Passed straight to cloudflared |
+| Additional arguments | Space-separated, quotes supported. `--token` is rejected here — use the token field |
 
 ## Flags & mapping
-- Disable QUIC → `--protocol http2`
-- Enable Post-Quantum → `--post-quantum`
-- Disable metrics → `--management-diagnostics=false`
-- Region → `--region <value>`
-- Edge IP version → `--edge-ip-version <auto|4|6>`
-- Hostname → `--hostname <hostname>`
-- Custom args → appended as-is to the cloudflared command
+| UI | cloudflared |
+| --- | --- |
+| Token mode | `tunnel run` + `TUNNEL_TOKEN` env var |
+| Quick mode | `tunnel --url http://localhost:<port>` |
+| Protocol QUIC / HTTP/2 | `--protocol quic` / `--protocol http2` (Auto adds nothing) |
+| Post-Quantum | `--post-quantum` |
+| Diagnostics off | `--management-diagnostics=false` |
+| Overwrite DNS | `--overwrite-dns` |
+| Region | `--region <value>` |
+| Edge IP version | `--edge-ip-version <4\|6>` |
+| Edge bind address | `--edge-bind-address <ip>` |
+| Label | `--label <text>` |
+| Additional arguments | appended as-is |
 
-## Background Service
-The app uses `flutter_foreground_task` to run a foreground service that keeps the tunnel alive even when the app is backgrounded or minimized.
+## How it works
+- On start, the app asks Android (via a `MethodChannel`) for its native library directory and runs `libcloudflared.so` from there as a subprocess. No binary is extracted at runtime.
+- `TunnelRunner` owns the process for the lifetime of the app, so closing or rebuilding the screen never kills the tunnel.
+- A foreground service (`flutter_foreground_task`) plus WakeLock keeps the process alive in the background; the notification shows the public URL once known.
+- stdout and stderr are read line by line, redacted for secrets, shown in the log, and scanned for the public URL (`*.trycloudflare.com` in Quick mode, the ingress hostname in Token mode).
+- If cloudflared exits unexpectedly and auto-restart is on, it is relaunched with exponential backoff.
+- Run state (PID, URL) and the last 300 log lines are persisted. After an app restart, if the foreground service is still running and the PID still belongs to cloudflared, the UI re-attaches (live output is unavailable until the next start; Stop still works).
 
-- **Service Initialization**: When you tap "Start", the app launches `FlutterForegroundTask.startService()`.
-- **Persistent Notification**: A notification appears with the tunnel status and public URL (if available).
-- **Graceful Shutdown**: Tapping "Stop" or closing the app stops the service cleanly.
-- **Task Handler**: The background task is managed by `TunnelTaskHandler()` in `lib/tunnel_task_handler.dart`.
+## Project layout
+```
+lib/
+  main.dart                    app entry, foreground-task setup, theme
+  tunnel_task_handler.dart     foreground service isolate (WakeLock)
+  models/tunnel_config.dart    settings model, argument builder, validation, token helpers
+  services/
+    tunnel_runner.dart         process lifecycle, restart/backoff, re-attach
+    settings_store.dart        SharedPreferences + secure storage
+    log_buffer.dart            bounded, throttled log
+    url_extractor.dart         public URL detection
+    system_monitor.dart        CPU / temperature
+  ui/tunnel_page.dart          the screen
+  constants/arguments.dart     supported-arguments reference
+test/                          unit tests for config/args, token helpers, URL extraction
+```
 
-**Note**: On Android 8.0+, foreground services require a notification to remain visible. This is intentional to comply with Android policy.
+## Build & run locally
+Prerequisites: Flutter 3.22.0, JDK 17, Android SDK. The Android project is generated by CI (`flutter create`) and is not committed, so a local run needs the same scaffolding and the `libcloudflared.so` files.
 
-## State Persistence
-The app uses `SharedPreferences` to save and restore tunnel state across app restarts.
+```
+git clone https://github.com/nam348tnh3gp/Tunnel.git
+cd Tunnel
+flutter pub get
+flutter analyze
+flutter test        # unit tests run without an Android project
+```
 
-**Saved state includes**:
-- `tunnel_log` — full log output from the tunnel.
-- `tunnel_url` — the public URL (for Try mode).
-- `tunnel_pid` — process ID of the running tunnel.
-- `tunnel_is_running` — boolean flag indicating if tunnel was running.
+To run on a device, generate the Android project (`flutter create .`), then place the binaries in:
+```
+android/app/src/main/jniLibs/arm64-v8a/libcloudflared.so
+android/app/src/main/jniLibs/armeabi-v7a/libcloudflared.so
+android/app/src/main/jniLibs/x86_64/libcloudflared.so
+android/app/src/main/jniLibs/x86/libcloudflared.so
+```
+and copy the manifest permissions, `MainActivity.kt` (the `getNativeLibraryDir` channel) and Gradle settings from `.github/workflows/build.yml`. The simplest route is to let CI build it.
 
-**Recovery Logic** (`_restoreRunningState()`):
-1. On app start, check if foreground service is still running.
-2. If service is active and `tunnel_is_running` was true → restore UI state (logs, URL, PID).
-3. If service is stopped but `tunnel_is_running` was true → show a warning and reset state.
-4. If service is not running → discard saved state and start fresh.
+## CI & releases
+See [`.github/workflows/build.yml`](.github/workflows/build.yml). It runs on pushes to `main`/`master`, pull requests, `v*` tags and manual dispatch.
 
-This ensures the app gracefully handles both intentional stops and unexpected process kills.
+1. Resolve the latest official `cloudflared` release tag (override with the `cloudflared_ref` input) and use cached binaries when available.
+2. Otherwise build cloudflared for arm64, armv7, x86_64 and x86 with the Android NDK r26c (Go version taken from cloudflared's `go.mod`).
+3. Generate the Flutter project, add the Android manifest / Gradle config, inject `jniLibs`.
+4. `flutter analyze` and `flutter test`, then `flutter build apk --release`.
+5. Upload the APK and its SHA-256 as an artifact. On `main` the version code is bumped and committed (`[skip ci]`).
+
+**Publishing a release:** make sure `version:` in `pubspec.yaml` matches, then
+```
+git tag v1.1.0-beta
+git push origin v1.1.0-beta
+```
+CI builds per-ABI and universal APKs, writes `SHA256SUMS.txt`, and creates the GitHub Release from `RELEASE_NOTES.md`. Tags containing `-` are marked pre-release.
+
+Signing uses repository secrets: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `KEY_ALIAS`.
 
 ## Troubleshooting
 
-### Binary not found / permission denied
-- Confirm `libcloudflared.so` is in `jniLibs/<abi>` or `assets/cloudflared` exists.
-- App runs `chmod 755` after extracting; verify device allows execution.
-- Check device logs: `adb logcat | grep Tunnel`
+**Binary not found** — the About dialog shows the native directory. `libcloudflared.so` must be present for your ABI; use a matching APK. Logs: `adb logcat | grep -i tunnel`.
 
-### Architecture mismatch
-- Use ABI-compatible build for your device (arm64 vs armeabi-v7a vs x86/x86_64).
-- Check device ABI: `adb shell getprop ro.product.cpu.abi`
+**Tunnel stops in the background** — tap ⋮ → *Disable battery optimization*, allow notifications, and keep the foreground notification visible. Some vendor ROMs also need "autostart"/"no restrictions" in their battery settings.
 
-### No public URL shown
-- Inspect logs. App looks for `https://*.trycloudflare.com` pattern.
-- Verify token (in Token mode) and network connectivity.
-- Ensure the local service is running on the specified port.
+**No public URL shown** — Quick mode prints a `trycloudflare.com` URL; Token mode shows the first hostname from your tunnel's ingress configuration. Check the log for errors, the token, and network connectivity, and make sure your local service is running on the chosen port.
 
-### Foreground service not starting
-- Verify device has Android 8.0+.
-- Check notification permissions in app settings.
-- Review logcat for service-related errors.
+**`WRN ... ping_group_range`** — Android does not let cloudflared use ICMP ping; it only affects the ICMP proxy, HTTP tunnelling works normally.
 
-### State not restored after app crash
-- Manual restart clears all recovery state for safety.
-- Check `shared_preferences` permissions in `AndroidManifest.xml`.
+**`ERR Connection terminated` when stopping** — expected during graceful shutdown.
 
-### Emulators
-- Many emulators run x86; ensure matching binaries or use physical device.
-- Performance stats may not work on all emulator configurations.
+**Keeps reconnecting** — check the token is valid and not revoked, try *Protocol → HTTP/2* on networks that block UDP/QUIC, or turn *Auto-restart* off to see the first error.
+
+**Emulators** — use an `x86_64` build or a physical device; CPU/temperature readout may be unavailable.
+
+<div align="center">
+<img src="https://gor-mez8.onrender.com/render.gif?text=SECURITY&effect=flicker&font=monobold&w=700&h=60&size=36&c1=ff2e88&bg=transparent&fps=15&dur=2&seed=7" alt="SECURITY" />
+</div>
 
 ## Security notes
-- Tunnel tokens are sensitive — keep them secret and never share them.
-- The app executes a native binary; use trusted cloudflared builds from official Cloudflare releases.
-- AndroidManifest uses `usesCleartextTraffic="true"` in the generated app to ease testing — review and adjust for production.
-- State is persisted locally using `SharedPreferences`; tokens in logs are saved in plaintext on device storage — consider securing this via encryption if needed.
-- Foreground service notification may display sensitive information (public URL) — this is user-controlled via the UI.
+- Tunnel tokens are secrets. The token is stored encrypted with `flutter_secure_storage`, passed to cloudflared through an environment variable (not visible in `ps`), and redacted from the log. Use the trash icon next to the field to forget it.
+- Logs are saved locally (last 300 lines) and can include hostnames and IPs; clear them before sharing.
+- The foreground notification displays the public URL while the tunnel runs.
+- The generated manifest sets `usesCleartextTraffic="true"` so you can reach local `http://` services; review it for production.
+- The app executes a native binary built by CI from an official cloudflared release tag; verify downloads with `SHA256SUMS.txt`.
+- This is an unofficial client. Use at your own risk; Cloudflare Tunnel is a service provided by Cloudflare Inc.
 
 ## Contributing
-- File issues or open PRs. When reporting runtime bugs include device model, Android version, and logs.
-- Suggested improvements:
-  - Secure token storage (encrypt SharedPreferences).
-  - Signed release builds and per-ABI APK artifacts.
-  - Enhanced log filtering and search functionality.
-  - Export logs to file with timestamp.
-  - Scheduled tunnel start/stop times.
-  - Multiple tunnel profiles/presets.
+Issues and PRs are welcome. When reporting a runtime bug, include the device model, Android version, ABI and the (redacted) log. Ideas:
+- Multiple tunnel profiles / presets
+- Export log to file
+- Scheduled start / stop
+- Per-ABI size optimisation
 
 ## License
-This project is licensed under the Apache License 2.0 — see `LICENSE`.
+Apache License 2.0 — see [`LICENSE`](LICENSE).
